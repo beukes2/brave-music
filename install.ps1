@@ -27,7 +27,10 @@ Write-Host "Granting Bluetooth + battery whitelist..." -ForegroundColor Cyan
 & $adb shell cmd deviceidle whitelist +com.space.braveplay 2>$null
 & $adb shell cmd deviceidle whitelist +com.brave.browser 2>$null
 
+Write-Host "Allowing media-button access (needed to forward play/pause to Brave)..." -ForegroundColor Cyan
+& $adb shell cmd notification allow_listener com.space.braveplay/com.space.braveplay.MediaListenerService 2>$null
+
 Write-Host "Starting app..." -ForegroundColor Cyan
 & $adb shell am start -n com.space.braveplay/.MainActivity
 
-Write-Host "Done. Tap a video in the app on the phone." -ForegroundColor Green
+Write-Host "Done. MUSIC ON keeps playing; the last chosen song is remembered." -ForegroundColor Green

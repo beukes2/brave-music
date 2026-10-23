@@ -3,6 +3,8 @@ package com.space.braveplay;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -25,6 +27,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -72,6 +75,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Logs.init(this);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -128,7 +132,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button settingsButton = new Button(this);
-        settingsButton.setText("Auto-play settings");
+        settingsButton.setText("Settings");
         settingsButton.setAllCaps(false);
         settingsButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -142,6 +146,18 @@ public class MainActivity extends Activity {
             }
         });
         footer.addView(settingsButton, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button logsButton = new Button(this);
+        logsButton.setText("Logs");
+        logsButton.setAllCaps(false);
+        logsButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showLogs();
+            }
+        });
+        footer.addView(logsButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         root.addView(footer);
@@ -202,6 +218,9 @@ public class MainActivity extends Activity {
         if (intent == null) {
             return;
         }
+        Logs.i("BravePlayUI", "intent music=" + intent.hasExtra("music")
+                + " index=" + intent.getIntExtra("index", 0)
+                + " url=" + intent.getStringExtra("url"));
         boolean hasMusic = intent.hasExtra("music");
         if (hasMusic) {
             Library.prefs(this).edit()
@@ -240,12 +259,15 @@ public class MainActivity extends Activity {
         if (position < 0 || position >= tracks.size()) {
             return;
         }
-        Radio.play(this, tracks.get(position));
+        Track track = tracks.get(position);
+        Logs.i("BravePlayUI", "user picked #" + (position + 1) + " \"" + track.displayTitle() + "\"");
+        Radio.play(this, track);
         refreshUi();
     }
 
     private void setMusicMode(boolean on) {
         Library.prefs(this).edit().putBoolean(Library.KEY_MUSIC_ON, on).apply();
+        Logs.i("BravePlayUI", "music mode " + (on ? "ON" : "OFF"));
         if (!on) {
             refreshUi();
             Toast.makeText(this, "Music off", Toast.LENGTH_SHORT).show();
@@ -369,6 +391,7 @@ public class MainActivity extends Activity {
                             return;
                         }
                         refreshList();
+                        Logs.i("BravePlayUI", "added " + added.size() + " link(s)");
                         Toast.makeText(MainActivity.this,
                                 added.size() == 1 ? "Added - looking up its title..."
                                         : added.size() + " links added",
@@ -408,6 +431,44 @@ public class MainActivity extends Activity {
                 });
             }
         }, "fetch-titles").start();
+    }
+
+    private void showLogs() {
+        final String text = Logs.tail(this, 400);
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        view.setTypeface(Typeface.MONOSPACE);
+        view.setTextColor(Color.parseColor("#E8EAED"));
+        view.setBackgroundColor(Color.parseColor("#101014"));
+        int pad = dp(12);
+        view.setPadding(pad, pad, pad, pad);
+        view.setTextIsSelectable(true);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(view);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Log - last 400 lines")
+                .setView(scroll)
+                .setPositiveButton("Copy", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        try {
+                            ClipboardManager clipboard =
+                                    (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                            clipboard.setPrimaryClip(
+                                    ClipData.newPlainText("Brave Music log", text));
+                            Toast.makeText(MainActivity.this, "Log copied",
+                                    Toast.LENGTH_SHORT).show();
+                        } catch (Exception e) {
+                            Toast.makeText(MainActivity.this, "Copy failed",
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                })
+                .setNegativeButton("Close", null)
+                .show();
     }
 
     private void confirmRemove(final int position) {

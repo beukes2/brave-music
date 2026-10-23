@@ -1,7 +1,6 @@
 package com.space.braveplay;
 
 import android.content.Context;
-import android.util.Log;
 
 import org.json.JSONObject;
 
@@ -80,12 +79,12 @@ public final class Discover {
                     continue;
                 }
                 Library.add(context, track);
-                Log.i(TAG, "discovered \"" + track.title + "\" (" + track.id + ") for query "
+                Logs.i(TAG, "discovered \"" + track.title + "\" (" + track.id + ") for query "
                         + query);
                 return track;
             }
         }
-        Log.i(TAG, "no new song found for " + seed.id);
+        Logs.i(TAG, "no new song found for " + seed.id);
         return null;
     }
 
@@ -150,7 +149,7 @@ public final class Discover {
                 key = match(page, API_KEY);
                 version = match(page, CLIENT_VERSION);
             } catch (Exception e) {
-                Log.w(TAG, "search page: " + e);
+                Logs.w(TAG, "search page: " + e);
             }
             if (key == null || version == null) {
                 return new ArrayList<String>(ids);
@@ -165,9 +164,9 @@ public final class Discover {
             while (matcher.find()) {
                 ids.add(matcher.group(1));
             }
-            Log.i(TAG, "search \"" + query + "\" -> " + ids.size() + " ids");
+            Logs.i(TAG, "search \"" + query + "\" -> " + ids.size() + " ids");
         } catch (Exception e) {
-            Log.w(TAG, "search failed: " + e);
+            Logs.w(TAG, "search failed: " + e);
         }
         return new ArrayList<String>(ids);
     }
@@ -186,7 +185,7 @@ public final class Discover {
                 duration = Integer.parseInt(seconds);
             }
         } catch (Exception e) {
-            Log.w(TAG, "watch page " + id + ": " + e);
+            Logs.w(TAG, "watch page " + id + ": " + e);
         }
 
         try {
@@ -198,7 +197,7 @@ public final class Discover {
             }
             author = object.optString("author_name");
         } catch (Exception e) {
-            Log.w(TAG, "oembed " + id + ": " + e);
+            Logs.w(TAG, "oembed " + id + ": " + e);
         }
 
         if (title == null || title.trim().isEmpty()) {
@@ -308,7 +307,7 @@ public final class Discover {
                 duration = Integer.parseInt(seconds);
             }
         } catch (Exception e) {
-            Log.w(TAG, "metadata page: " + e);
+            Logs.w(TAG, "metadata page: " + e);
         }
         try {
             String json = get("https://www.youtube.com/oembed?format=json&url="
@@ -319,7 +318,7 @@ public final class Discover {
             }
             author = object.optString("author_name");
         } catch (Exception e) {
-            Log.w(TAG, "metadata oembed: " + e);
+            Logs.w(TAG, "metadata oembed: " + e);
         }
         return new Track(id, url, title, author, duration);
     }

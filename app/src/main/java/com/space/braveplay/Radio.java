@@ -6,7 +6,6 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.SystemClock;
-import android.util.Log;
 
 /**
  * Chooses what to play next and opens it in Brave.
@@ -42,7 +41,7 @@ public final class Radio {
                 .putLong(Library.KEY_PLAYING_SINCE, 0L)
                 .apply();
         Library.recordPlay(context, track.id);
-        Log.i(TAG, "play \"" + track.displayTitle() + "\" (" + track.id + ")");
+        Logs.i(TAG, "play \"" + track.displayTitle() + "\" (" + track.id + ")");
         launch(context, track.url);
     }
 
@@ -55,12 +54,12 @@ public final class Radio {
         if (next != null) {
             return next;
         }
-        Log.i(TAG, "everything played this hour -> discovering something new");
+        Logs.i(TAG, "everything played this hour -> discovering something new");
         next = Discover.findSimilar(context, current);
         if (next != null) {
             return next;
         }
-        Log.w(TAG, "discovery failed, falling back to the least recently played song");
+        Logs.w(TAG, "discovery failed, falling back to the least recently played song");
         return Library.oldestPlayed(context);
     }
 
@@ -88,7 +87,7 @@ public final class Radio {
         try {
             context.startActivity(view);
         } catch (Exception e) {
-            Log.w(TAG, "launch failed: " + e);
+            Logs.w(TAG, "launch failed: " + e);
         }
     }
 
