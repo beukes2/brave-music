@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Brave Music</string>
+    <string name="accessibility_label">Brave auto-play</string>
+    <string name="accessibility_description">Taps the Play button on YouTube videos once they load in Brave, so the video starts without a manual tap.</string>
+</resources>
