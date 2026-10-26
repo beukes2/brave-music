@@ -20,7 +20,7 @@ import java.util.Locale;
 public final class Logs {
 
     private static final String FILE_NAME = "app.log";
-    private static final long MAX_BYTES = 512 * 1024L;
+    private static final long MAX_BYTES = 1024 * 1024L;
     private static final Object LOCK = new Object();
 
     private static File file;

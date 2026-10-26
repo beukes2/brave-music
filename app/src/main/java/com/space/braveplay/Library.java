@@ -27,6 +27,10 @@ public final class Library {
     public static final String KEY_OPEN_AT = "open_at";
     public static final String KEY_PLAYED_MS = "played_ms";
     public static final String KEY_PLAYING_SINCE = "playing_since";
+    /** Changes on every explicit play, so replaying the same URL still resets progress. */
+    public static final String KEY_SESSION = "play_session";
+    /** User wants songs recorded and played from local storage. */
+    public static final String KEY_RECORD_LOCAL = "record_local";
 
     /** Repeat window: the same song is not chosen again for an hour. */
     public static final long REPEAT_WINDOW_MS = 60 * 60 * 1000L;
@@ -181,6 +185,29 @@ public final class Library {
         }
         if (changed) {
             saveCustom(context, custom);
+        }
+    }
+
+    /**
+     * Removes YouTube Shorts/clips (a few seconds long) that were discovered before the
+     * Music/duration filter existed. They are never songs for the radio.
+     */
+    public static void cleanupShorts(Context context) {
+        List<Track> custom = custom(context);
+        List<Track> kept = new ArrayList<Track>();
+        int removed = 0;
+        for (Track track : custom) {
+            if (track.durationSec > 0 && track.durationSec < 45) {
+                removed++;
+                Logs.i("BravePlayLibrary", "removing clip \"" + track.displayTitle()
+                        + "\" (" + track.durationSec + "s)");
+            } else {
+                kept.add(track);
+            }
+        }
+        if (removed > 0) {
+            saveCustom(context, kept);
+            Logs.i("BravePlayLibrary", "removed " + removed + " clip(s) from the library");
         }
     }
 

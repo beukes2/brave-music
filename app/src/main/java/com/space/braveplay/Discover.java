@@ -45,8 +45,12 @@ public final class Discover {
             Pattern.compile("\"INNERTUBE_API_KEY\":\"([^\"]+)\"");
     private static final Pattern CLIENT_VERSION =
             Pattern.compile("\"INNERTUBE_CLIENT_VERSION\":\"([^\"]+)\"");
+    private static final Pattern CATEGORY =
+            Pattern.compile("\"category\"\\s*:\\s*\"([^\"]{1,40})\"");
 
     private static final int MAX_CANDIDATES = 6;
+    /** Shorts and clips are not songs; ignore anything shorter than this. */
+    private static final int MIN_DISCOVERY_SECONDS = 60;
 
     private Discover() {
     }
@@ -175,11 +179,13 @@ public final class Discover {
     private static Track fetch(String id) {
         String title = "";
         String author = "";
+        String category = null;
         int duration = 0;
 
         try {
             String page = get("https://www.youtube.com/watch?v=" + id);
             title = unescape(match(page, OG_TITLE));
+            category = match(page, CATEGORY);
             String seconds = match(page, LENGTH);
             if (seconds != null) {
                 duration = Integer.parseInt(seconds);
@@ -200,10 +206,31 @@ public final class Discover {
             Logs.w(TAG, "oembed " + id + ": " + e);
         }
 
+        if (!isMusicCandidate(category, duration, author)) {
+            Logs.i(TAG, "skipped " + id + " (category=" + category
+                    + " duration=" + duration + "s author=" + author + ")");
+            return null;
+        }
+
         if (title == null || title.trim().isEmpty()) {
             title = id;
         }
         return new Track(id, "https://www.youtube.com/watch?v=" + id, title, author, duration);
+    }
+
+    /**
+     * Only real songs: the video must be in YouTube's Music category (or come from a
+     * "- Topic" auto-generated music channel) and must not be a Short/clip.
+     */
+    private static boolean isMusicCandidate(String category, int duration, String author) {
+        boolean music;
+        if (category != null && !category.trim().isEmpty()) {
+            music = "music".equalsIgnoreCase(category.trim());
+        } else {
+            music = author != null
+                    && author.trim().toLowerCase(Locale.ROOT).endsWith("- topic");
+        }
+        return music && (duration <= 0 || duration >= MIN_DISCOVERY_SECONDS);
     }
 
     // ------------------------------------------------------------------ http

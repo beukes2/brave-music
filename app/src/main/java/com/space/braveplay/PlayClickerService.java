@@ -3,6 +3,7 @@ package com.space.braveplay;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.content.ComponentName;
 import android.content.Context;
@@ -31,6 +32,7 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -97,6 +99,10 @@ public class PlayClickerService extends AccessibilityService {
     private long lastBluetoothAttempt;
     private long lastHeartbeatAt;
     private long silentSince;
+    private long lastTransportPlayAt;
+    private boolean transportAttempted;
+    private long lastLockedLogAt;
+    private long lastBackgroundScanLog;
     private boolean quickSettingsBusy;
     private boolean advancing;
     private boolean userPaused;
@@ -111,8 +117,28 @@ public class PlayClickerService extends AccessibilityService {
     private MediaSessionManager mediaSessionManager;
     private MediaSessionManager.OnMediaKeyEventSessionChangedListener sessionChangedListener;
     private long lastBumpAt;
+    private long lastBravePauseAt;
     private final ArrayDeque<String> previousUrls = new ArrayDeque<String>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+    /**
+     * Runs once a second while MUSIC ON. The recorder uses this to start at the beginning
+     * of a song (the 5 s control tick would miss too much of the intro).
+     */
+    private final Runnable recorderTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!isMusicOn()) {
+                return;
+            }
+            long now = SystemClock.uptimeMillis();
+            boolean local = LocalPlayer.isActive();
+            boolean playing = isMusicPlaying();
+            RecorderService.onPlayback(playing && !local, userPaused,
+                    currentPositionMs(playing, now));
+            handler.postDelayed(this, 1000L);
+        }
+    };
 
     private final Runnable ticker = new Runnable() {
         @Override
@@ -137,18 +163,30 @@ public class PlayClickerService extends AccessibilityService {
                         syncWakeLock();
                         if (isMusicOn()) {
                             userPaused = false;
+                            transportAttempted = false;
                             ensureMediaSession();
                             ensureAudibleVolume();
                             ensureBluetoothOn();
+                            KeepAliveService.start(PlayClickerService.this);
                             startTicker();
+                            resumeCurrentIfLocal();
                             nextActionAt = 0;
                             actionDelay = MIN_ACTION_DELAY_MS;
                             scanSoon(STARTUP_SCANS_MS);
                         } else {
                             stopTicker();
                             releaseMediaSession();
+                            KeepAliveService.stop(PlayClickerService.this);
+                            RecorderService.onMusicOff();
+                            LocalPlayer.stop();
                         }
                     } else if (Library.KEY_URL.equals(key)) {
+                        nextActionAt = 0;
+                        actionDelay = MIN_ACTION_DELAY_MS;
+                        resetProgress(sharedPreferences.getString(Library.KEY_URL, ""));
+                        scanSoon(STARTUP_SCANS_MS);
+                    } else if (Library.KEY_SESSION.equals(key)) {
+                        // Replaying the same URL also needs a clean progress count.
                         nextActionAt = 0;
                         actionDelay = MIN_ACTION_DELAY_MS;
                         resetProgress(sharedPreferences.getString(Library.KEY_URL, ""));
@@ -162,12 +200,30 @@ public class PlayClickerService extends AccessibilityService {
         @Override
         public void onReceive(Context context, Intent intent) {
             String action = intent == null ? null : intent.getAction();
+            if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)) {
+                // A pause is often sent when the car/headset disconnects. Coming back should
+                // start the radio again instead of staying paused forever.
+                Logs.i(TAG, "bluetooth connected");
+                if (isMusicOn() && userPaused) {
+                    userPaused = false;
+                    nextActionAt = 0L;
+                    actionDelay = MIN_ACTION_DELAY_MS;
+                    silentSince = 0L;
+                    transportAttempted = false;
+                    lastTransportPlayAt = 0L;
+                    forwardToBrave(true);
+                    scanSoon(STARTUP_SCANS_MS);
+                }
+                return;
+            }
             Logs.i(TAG, "screen event: " + action);
             if (Intent.ACTION_SCREEN_ON.equals(action)
                     || Intent.ACTION_USER_PRESENT.equals(action)) {
                 nextActionAt = 0L;
                 actionDelay = MIN_ACTION_DELAY_MS;
                 silentSince = 0L;
+                transportAttempted = false;
+                lastTransportPlayAt = 0L;
                 scanSoon(STARTUP_SCANS_MS);
             }
         }
@@ -176,11 +232,11 @@ public class PlayClickerService extends AccessibilityService {
     private final Runnable scanTask = new Runnable() {
         @Override
         public void run() {
-            if (!isMusicOn() || userPaused) {
+            if (!isMusicOn() || userPaused || LocalPlayer.isActive()) {
                 return;
             }
-            if (isBraveForeground()) {
-                scanAndClick();
+            if (isBraveForeground() || (keyguardLocked() && hasBraveWindow())) {
+                scanAndClick(!isMusicPlaying());
             }
         }
     };
@@ -194,14 +250,31 @@ public class PlayClickerService extends AccessibilityService {
         registerVolumeObserver();
         registerScreenReceiver();
         syncWakeLock();
+        Library.cleanupShorts(this);
+        LocalPlayer.setOnComplete(new Runnable() {
+            @Override
+            public void run() {
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (isMusicOn()) {
+                            advance("local song finished");
+                        }
+                    }
+                });
+            }
+        });
         playedMs = prefs.getLong(Library.KEY_PLAYED_MS, 0L);
         trackedUrl = prefs.getString(Library.KEY_URL, "");
         if (isMusicOn()) {
             userPaused = false;
+            transportAttempted = false;
             ensureMediaSession();
             ensureAudibleVolume();
             ensureBluetoothOn();
+            KeepAliveService.start(this);
             startTicker();
+            resumeCurrentIfLocal();
         }
         scanSoon(STARTUP_SCANS_MS);
         Logs.i(TAG, "connected, music=" + isMusicOn()
@@ -241,6 +314,8 @@ public class PlayClickerService extends AccessibilityService {
             // nothing
         }
         releaseMediaSession();
+        LocalPlayer.setOnComplete(null);
+        LocalPlayer.stop();
         executor.shutdownNow();
         if (prefs != null) {
             prefs.unregisterOnSharedPreferenceChangeListener(prefListener);
@@ -276,11 +351,17 @@ public class PlayClickerService extends AccessibilityService {
 
         long now = SystemClock.uptimeMillis();
         boolean playing = isMusicPlaying();
+        boolean local = LocalPlayer.isActive();
         boolean braveForeground = isBraveForeground();
+        if (local) {
+            pauseBraveIfPlaying(now);
+        }
 
         if (playing) {
             silentSince = 0L;
             startedSinceOpen = true;
+            transportAttempted = false;
+            lastTransportPlayAt = 0L;
         } else {
             if (silentSince == 0L) {
                 silentSince = now;
@@ -309,13 +390,15 @@ public class PlayClickerService extends AccessibilityService {
         }
 
         // End screen ("Replay") means the song is over - move on instead of restarting it.
-        if (!playing && braveForeground && hasReplayButton()) {
+        if (!playing && !local && braveForeground && hasReplayButton()) {
             advance("replay shown");
             return;
         }
 
-        // Muted playback still has an audio track; always clear the mute overlay.
-        if (braveForeground && scanAndClick()) {
+        // Muted playback still has an audio track; always clear the mute overlay. While the
+        // keyguard is up, try Brave's window behind it (a locked page still plays audio).
+        if (!local && (braveForeground || (keyguardLocked() && hasBraveWindow()))
+                && scanAndClick(!playing)) {
             actionDelay = MIN_ACTION_DELAY_MS;
             nextActionAt = 0L;
         }
@@ -339,8 +422,9 @@ public class PlayClickerService extends AccessibilityService {
             lastHeartbeatAt = now;
             Logs.i(TAG, "tick: playing=" + playing
                     + " heard=" + (effectivePlayedMs(playing, now) / 1000L) + "s/"
-                    + prefs.getInt(Library.KEY_DURATION, 0) + "s"
+                    + currentDurationSeconds() + "s"
                     + " silent=" + (silentSince == 0L ? 0L : (now - silentSince) / 1000L) + "s"
+                    + (keyguardLocked() ? " locked=true" : "")
                     + (userPaused ? " userPaused=true" : "")
                     + " track=" + Urls.videoId(url));
         }
@@ -351,6 +435,15 @@ public class PlayClickerService extends AccessibilityService {
         if (userPaused) {
             return;
         }
+        // A saved copy needs no browser, no accessibility and no lock-screen tricks; just
+        // resume it if it stalled. Its completion callback advances the rotation.
+        if (LocalPlayer.isActive()) {
+            if (!LocalPlayer.isPlaying() && !LocalPlayer.hasCompleted()) {
+                Logs.i(TAG, "silent -> local resume");
+                LocalPlayer.resume();
+            }
+            return;
+        }
         long openedAt = prefs.getLong(Library.KEY_OPEN_AT, 0L);
         long grace = startedSinceOpen ? LOAD_GRACE_MS : COLD_LOAD_GRACE_MS;
         if (now - openedAt < grace) {
@@ -359,39 +452,103 @@ public class PlayClickerService extends AccessibilityService {
         if (silentSince == 0L || now - silentSince < SILENCE_TRIGGER_MS) {
             return;
         }
-        if (keyguardLocked()) {
-            // A page behind the lock screen cannot start sound; the unlock broadcast
-            // restarts this immediately.
-            return;
+
+        // Ask Brave's own media session to play first: this works even with the screen
+        // locked and needs no UI. A user pause returned above, so this is a stall only.
+        if (!transportAttempted) {
+            if (resumeViaBrave()) {
+                transportAttempted = true;
+                lastTransportPlayAt = now;
+                return;
+            }
+        }
+        if (transportAttempted && now - lastTransportPlayAt < 12_000L) {
+            return; // give the play command a moment to take effect
+        }
+
+        boolean locked = keyguardLocked();
+        if (locked && now - lastLockedLogAt > 60_000L) {
+            lastLockedLogAt = now;
+            Logs.w(TAG, "silent while locked (" + (now - silentSince) / 1000L
+                    + "s): trying to recover behind the lock screen");
         }
         if (now < nextActionAt) {
             return;
         }
-        nextActionAt = now + actionDelay;
-        actionDelay = Math.min(actionDelay * 2, MAX_ACTION_DELAY_MS);
+        long spacing = locked ? Math.max(actionDelay, 120_000L) : actionDelay;
+        nextActionAt = now + spacing;
+        if (!locked) {
+            actionDelay = Math.min(actionDelay * 2, MAX_ACTION_DELAY_MS);
+        }
 
-        if (isBraveForeground() && tapReload()) {
+        if ((isBraveForeground() || (locked && hasBraveWindow())) && tapReload()) {
             prefs.edit().putLong(Library.KEY_OPEN_AT, now).apply();
             silentSince = now;
             startedSinceOpen = false;
-            Logs.w(TAG, "silent -> reloaded page");
+            transportAttempted = false;
+            Logs.w(TAG, "silent -> reloaded page" + (locked ? " (locked)" : ""));
             scanSoon(STARTUP_SCANS_MS);
             return;
         }
 
         silentSince = now;
         startedSinceOpen = false;
-        Logs.w(TAG, "silent -> reopening " + url);
+        transportAttempted = false;
+        Logs.w(TAG, "silent -> reopening " + url + (locked ? " (locked)" : ""));
         wakeScreen();
         relaunch(url);
         scanSoon(STARTUP_SCANS_MS);
     }
 
+    /** Un-pauses a stalled page through Brave's media session (works with the screen locked). */
+    private boolean resumeViaBrave() {
+        MediaController brave = braveController();
+        if (brave == null) {
+            return false;
+        }
+        try {
+            PlaybackState state = brave.getPlaybackState();
+            int value = state == null ? PlaybackState.STATE_NONE : state.getState();
+            if (value == PlaybackState.STATE_NONE) {
+                return false;
+            }
+            if (value == PlaybackState.STATE_PLAYING && state.getPlaybackSpeed() > 0f) {
+                return false;
+            }
+            Logs.i(TAG, "silent -> media session play (state=" + value + ")");
+            brave.getTransportControls().play();
+            return true;
+        } catch (Throwable t) {
+            Logs.w(TAG, "media session play: " + t);
+            return false;
+        }
+    }
+
+    /** When a saved copy is playing, keep Brave paused so two songs do not overlap. */
+    private void pauseBraveIfPlaying(long now) {
+        if (now - lastBravePauseAt < 15_000L) {
+            return;
+        }
+        lastBravePauseAt = now;
+        MediaController brave = braveController();
+        if (brave == null) {
+            return;
+        }
+        try {
+            PlaybackState state = brave.getPlaybackState();
+            if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
+                brave.getTransportControls().pause();
+                Logs.i(TAG, "paused Brave while a saved copy plays");
+            }
+        } catch (Throwable t) {
+            Logs.w(TAG, "pause Brave: " + t);
+        }
+    }
+
     /**
      * A cold page will not autoplay sound while the screen is off. Only used when the stream
      * already died and reopening is the only way back.
-     */
-    @SuppressWarnings("deprecation")
+     */    @SuppressWarnings("deprecation")
     private boolean screenOffAndLocked() {
         try {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
@@ -454,7 +611,7 @@ public class PlayClickerService extends AccessibilityService {
         }
 
         long effective = effectivePlayedMs(playing, now);
-        int durationSec = prefs.getInt(Library.KEY_DURATION, 0);
+        int durationSec = currentDurationSeconds();
 
         if (durationSec > 0) {
             long durationMs = durationSec * 1000L;
@@ -468,13 +625,70 @@ public class PlayClickerService extends AccessibilityService {
             }
         }
 
-        if (!playing && isBraveForeground() && hasReplayButton()) {
+        if (!playing && !LocalPlayer.isActive() && isBraveForeground() && hasReplayButton()) {
             advance("replay shown");
         }
     }
 
     private long effectivePlayedMs(boolean playing, long now) {
         return playedMs + (playing && playingSince != 0L ? now - playingSince : 0L);
+    }
+
+    /** The saved file's real length while it plays; YouTube's length otherwise. */
+    private int currentDurationSeconds() {
+        if (LocalPlayer.isActive()) {
+            int local = LocalPlayer.durationSeconds();
+            if (local > 0) {
+                return local;
+            }
+        }
+        return prefs.getInt(Library.KEY_DURATION, 0);
+    }
+
+    /**
+     * Playback position for the recorder. The app's own counter resets when the
+     * accessibility service reconnects, so prefer Brave's real position when the media
+     * session is showing the current song. A position well above zero means the recorder
+     * is starting mid-song and must not keep that fragment as a "complete" copy.
+     */
+    private long currentPositionMs(boolean playing, long now) {
+        long position = effectivePlayedMs(playing, now);
+        MediaController brave = braveController();
+        if (brave == null) {
+            return position;
+        }
+        try {
+            PlaybackState state = brave.getPlaybackState();
+            if (state == null || state.getState() != PlaybackState.STATE_PLAYING) {
+                return position;
+            }
+            MediaMetadata meta = brave.getMetadata();
+            Track current = Library.current(this);
+            if (meta == null || current == null) {
+                return position;
+            }
+            String mediaId = meta.getString(MediaMetadata.METADATA_KEY_MEDIA_ID);
+            String title = meta.getString(MediaMetadata.METADATA_KEY_TITLE);
+            if ((mediaId != null && mediaId.equals(current.id))
+                    || titlesMatch(title, current.title)) {
+                return Math.max(position, state.getPosition());
+            }
+        } catch (Throwable t) {
+            Logs.w(TAG, "position: " + t);
+        }
+        return position;
+    }
+
+    private boolean titlesMatch(String fromBrave, String fromLibrary) {
+        if (fromBrave == null || fromLibrary == null) {
+            return false;
+        }
+        String a = fromBrave.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+        String b = fromLibrary.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+        if (a.length() < 4 || b.length() < 4) {
+            return false;
+        }
+        return a.equals(b) || a.contains(b) || b.contains(a);
     }
 
     private void resetProgress(String url) {
@@ -484,10 +698,16 @@ public class PlayClickerService extends AccessibilityService {
         silentSince = 0L;
         userPaused = false;
         startedSinceOpen = false;
+        transportAttempted = false;
+        lastTransportPlayAt = 0L;
         prefs.edit().putLong(Library.KEY_PLAYED_MS, 0L).apply();
         Track track = Library.findByUrl(this, trackedUrl);
+        if (track == null) {
+            track = Library.current(this);
+        }
         Logs.i(TAG, "now playing: " + (track == null ? Urls.videoId(trackedUrl)
                 : "\"" + track.displayTitle() + "\" (" + track.id + ")"));
+        RecorderService.onTrackSelected(this, track);
     }
 
     /** Picks the next song off the UI thread and starts it. */
@@ -728,8 +948,9 @@ public class PlayClickerService extends AccessibilityService {
                         .putString(MediaMetadata.METADATA_KEY_TITLE, current.displayTitle())
                         .putString(MediaMetadata.METADATA_KEY_ARTIST, current.displayAuthor());
                 if (current.durationSec > 0) {
+                    int duration = currentDurationSeconds();
                     meta.putLong(MediaMetadata.METADATA_KEY_DURATION,
-                            current.durationSec * 1000L);
+                            (duration > 0 ? duration : current.durationSec) * 1000L);
                 }
                 mediaSession.setMetadata(meta.build());
             }
@@ -750,6 +971,15 @@ public class PlayClickerService extends AccessibilityService {
 
     /** Sends play/pause to Brave, which actually owns the audio. */
     private void forwardToBrave(boolean play) {
+        if (LocalPlayer.isActive()) {
+            if (play) {
+                LocalPlayer.resume();
+            } else {
+                LocalPlayer.pause();
+            }
+            Logs.i(TAG, "forwarded " + (play ? "play" : "pause") + " to local player");
+            return;
+        }
         try {
             MediaSessionManager manager =
                     (MediaSessionManager) getSystemService(MEDIA_SESSION_SERVICE);
@@ -844,13 +1074,9 @@ public class PlayClickerService extends AccessibilityService {
     // ---------------------------------------------------------------- tapping
 
     /** Taps dismiss/play/unmute if one of them is visible. */
-    private boolean scanAndClick() {
-        AccessibilityNodeInfo root = getRootInActiveWindow();
+    private boolean scanAndClick(boolean allowPlay) {
+        AccessibilityNodeInfo root = braveRoot();
         if (root == null) {
-            return false;
-        }
-        CharSequence pkgName = root.getPackageName();
-        if (pkgName == null || !pkgName.toString().startsWith("com.brave.browser")) {
             return false;
         }
         long now = SystemClock.uptimeMillis();
@@ -858,11 +1084,12 @@ public class PlayClickerService extends AccessibilityService {
             return false;
         }
 
+        boolean behindLock = keyguardLocked();
         List<AccessibilityNodeInfo> nodes = flatten(root);
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
 
         for (AccessibilityNodeInfo node : nodes) {
-            if (matches(node, DISMISS_LABELS) && isVisible(node, screenHeight)) {
+            if (matches(node, DISMISS_LABELS) && isVisible(node, screenHeight, behindLock)) {
                 if (clickNode(node)) {
                     lastClickAt = SystemClock.uptimeMillis();
                     Logs.i(TAG, "dismissed dialog");
@@ -872,21 +1099,25 @@ public class PlayClickerService extends AccessibilityService {
         }
 
         for (AccessibilityNodeInfo node : nodes) {
-            if (matches(node, UNMUTE_LABELS) && isVisible(node, screenHeight)) {
+            if (matches(node, UNMUTE_LABELS) && isVisible(node, screenHeight, behindLock)) {
                 if (clickNode(node)) {
                     lastClickAt = SystemClock.uptimeMillis();
-                    Logs.i(TAG, "tapped unmute");
+                    Logs.i(TAG, "tapped unmute" + (behindLock ? " (locked)" : ""));
                     return true;
                 }
             }
         }
 
-        for (AccessibilityNodeInfo node : nodes) {
-            if (matches(node, PLAY_LABELS) && isVisible(node, screenHeight)) {
-                if (clickNode(node)) {
-                    lastClickAt = SystemClock.uptimeMillis();
-                    Logs.i(TAG, "tapped play");
-                    return true;
+        // Tapping "Play" while the video is already playing toggles it to PAUSE. That is
+        // exactly what silently killed the radio several times, so only do it while silent.
+        if (allowPlay) {
+            for (AccessibilityNodeInfo node : nodes) {
+                if (matches(node, PLAY_LABELS) && isVisible(node, screenHeight, behindLock)) {
+                    if (clickNode(node)) {
+                        lastClickAt = SystemClock.uptimeMillis();
+                        Logs.i(TAG, "tapped play" + (behindLock ? " (locked)" : ""));
+                        return true;
+                    }
                 }
             }
         }
@@ -895,16 +1126,18 @@ public class PlayClickerService extends AccessibilityService {
 
     /** Hits Brave's toolbar reload button, which reloads in the same tab. */
     private boolean tapReload() {
-        AccessibilityNodeInfo root = getRootInActiveWindow();
+        AccessibilityNodeInfo root = braveRoot();
         if (root == null) {
             return false;
         }
+        boolean behindLock = keyguardLocked();
         List<AccessibilityNodeInfo> nodes = flatten(root);
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
         for (AccessibilityNodeInfo node : nodes) {
-            if (matches(node, RELOAD_LABELS) && isVisible(node, screenHeight)) {
+            if (matches(node, RELOAD_LABELS) && isVisible(node, screenHeight, behindLock)) {
                 if (clickNode(node)) {
                     lastClickAt = SystemClock.uptimeMillis();
+                    Logs.i(TAG, "tapped reload" + (behindLock ? " (locked)" : ""));
                     return true;
                 }
             }
@@ -912,7 +1145,66 @@ public class PlayClickerService extends AccessibilityService {
         return false;
     }
 
+    /**
+     * Brave's node tree: normally the active window, or its window behind the lock screen.
+     * A page that is not on top can still be driven with accessibility actions.
+     */
+    private AccessibilityNodeInfo braveRoot() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (isBraveRoot(root)) {
+            return root;
+        }
+        if (!keyguardLocked()) {
+            return null;
+        }
+        try {
+            for (AccessibilityWindowInfo window : getWindows()) {
+                AccessibilityNodeInfo candidate = window.getRoot();
+                if (isBraveRoot(candidate)) {
+                    long now = SystemClock.uptimeMillis();
+                    if (now - lastBackgroundScanLog > 30_000L) {
+                        lastBackgroundScanLog = now;
+                        Logs.i(TAG, "using Brave window behind the lock screen");
+                    }
+                    return candidate;
+                }
+            }
+        } catch (Throwable t) {
+            Logs.w(TAG, "brave window: " + t);
+        }
+        return null;
+    }
+
+    private boolean isBraveRoot(AccessibilityNodeInfo root) {
+        if (root == null || root.getPackageName() == null) {
+            return false;
+        }
+        return root.getPackageName().toString().startsWith("com.brave.browser");
+    }
+
+    private boolean hasBraveWindow() {
+        return braveRoot() != null;
+    }
+
+    /** MUSIC ON: if the current song is saved, play the local copy instead of waiting for Brave. */
+    private void resumeCurrentIfLocal() {
+        if (LocalPlayer.isActive()) {
+            return;
+        }
+        Track current = Library.current(this);
+        if (current != null && LocalStore.has(this, current.id)) {
+            // Starting a fresh player must also start a fresh progress count, otherwise a
+            // song that was paused/stopped would be cut short by the old elapsed time.
+            resetProgress(prefs.getString(Library.KEY_URL, ""));
+            Logs.i(TAG, "resuming saved copy after reconnect");
+            LocalPlayer.play(this, current);
+        }
+    }
+
     private boolean isMusicPlaying() {
+        if (LocalPlayer.isActive()) {
+            return LocalPlayer.isPlaying();
+        }
         // Our own silent keep-alive track would make isMusicActive() permanently true, so ask
         // Brave's own media session what it is doing instead.
         MediaController brave = braveController();
@@ -1100,10 +1392,13 @@ public class PlayClickerService extends AccessibilityService {
     private void startTicker() {
         handler.removeCallbacks(ticker);
         handler.post(ticker);
+        handler.removeCallbacks(recorderTick);
+        handler.post(recorderTick);
     }
 
     private void stopTicker() {
         handler.removeCallbacks(ticker);
+        handler.removeCallbacks(recorderTick);
     }
 
     private void registerScreenReceiver() {
@@ -1242,8 +1537,10 @@ public class PlayClickerService extends AccessibilityService {
         return value.toString().trim().toLowerCase(Locale.ROOT);
     }
 
-    private boolean isVisible(AccessibilityNodeInfo node, int screenHeight) {
-        if (!node.isVisibleToUser()) {
+    private boolean isVisible(AccessibilityNodeInfo node, int screenHeight, boolean behindLock) {
+        // Nodes in a window behind the keyguard often report visibleToUser=false even
+        // though accessibility actions on them still work.
+        if (!behindLock && !node.isVisibleToUser()) {
             return false;
         }
         Rect bounds = new Rect();
@@ -1265,6 +1562,11 @@ public class PlayClickerService extends AccessibilityService {
                 return true;
             }
             clickable = clickable.getParent();
+        }
+        if (keyguardLocked()) {
+            // Never blind-tap the lock screen: the coordinates would hit the keyguard, not
+            // Brave, and could dismiss notifications or press PIN keys.
+            return false;
         }
         return tapCenter(node);
     }

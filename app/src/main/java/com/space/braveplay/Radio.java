@@ -3,7 +3,11 @@ package com.space.braveplay;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.ComponentName;
 import android.content.pm.PackageManager;
+import android.media.session.MediaController;
+import android.media.session.MediaSessionManager;
+import android.media.session.PlaybackState;
 import android.net.Uri;
 import android.os.SystemClock;
 
@@ -39,10 +43,53 @@ public final class Radio {
                 .putLong(Library.KEY_OPEN_AT, SystemClock.uptimeMillis())
                 .putLong(Library.KEY_PLAYED_MS, 0L)
                 .putLong(Library.KEY_PLAYING_SINCE, 0L)
+                .putLong(Library.KEY_SESSION, System.currentTimeMillis())
                 .apply();
         Library.recordPlay(context, track.id);
         Logs.i(TAG, "play \"" + track.displayTitle() + "\" (" + track.id + ")");
+
+        // Prefer a song that was already recorded: it plays with the screen off and the
+        // phone locked, and needs neither Brave nor the accessibility service.
+        if (LocalPlayer.play(context, track)) {
+            int localSeconds = LocalPlayer.durationSeconds();
+            if (localSeconds > 0) {
+                // The saved file includes a little lead-in/out; using its real length keeps
+                // the rotation from cutting the song early.
+                Library.prefs(context).edit()
+                        .putInt(Library.KEY_DURATION, localSeconds).apply();
+            }
+            pauseBrave(context);
+            Logs.i(TAG, "using saved local copy");
+            return;
+        }
+        LocalPlayer.stop();
         launch(context, track.url);
+    }
+
+    /** Stops Brave so it does not play over a saved local copy. */
+    private static void pauseBrave(Context context) {
+        try {
+            MediaSessionManager manager = (MediaSessionManager)
+                    context.getSystemService(Context.MEDIA_SESSION_SERVICE);
+            if (manager == null) {
+                return;
+            }
+            for (MediaController controller : manager.getActiveSessions(
+                    new ComponentName(context, MediaListenerService.class))) {
+                String pkg = controller.getPackageName();
+                if (pkg == null || !pkg.startsWith("com.brave.browser")) {
+                    continue;
+                }
+                PlaybackState state = controller.getPlaybackState();
+                if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
+                    controller.getTransportControls().pause();
+                    Logs.i(TAG, "paused Brave before local playback");
+                }
+                return;
+            }
+        } catch (Throwable t) {
+            Logs.w(TAG, "pause Brave: " + t);
+        }
     }
 
     /**

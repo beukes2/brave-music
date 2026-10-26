@@ -22,8 +22,10 @@ Write-Host "Enabling the auto-play accessibility service..." -ForegroundColor Cy
 & $adb shell settings put secure accessibility_enabled 0
 & $adb shell settings put secure accessibility_enabled 1
 
-Write-Host "Granting Bluetooth + battery whitelist..." -ForegroundColor Cyan
+Write-Host "Granting Bluetooth + notifications + battery whitelist..." -ForegroundColor Cyan
 & $adb shell pm grant com.space.braveplay android.permission.BLUETOOTH_CONNECT 2>$null
+& $adb shell pm grant com.space.braveplay android.permission.POST_NOTIFICATIONS 2>$null
+& $adb shell pm grant com.space.braveplay android.permission.RECORD_AUDIO 2>$null
 & $adb shell cmd deviceidle whitelist +com.space.braveplay 2>$null
 & $adb shell cmd deviceidle whitelist +com.brave.browser 2>$null
 

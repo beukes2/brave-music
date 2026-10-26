@@ -12,6 +12,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
+import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -53,12 +54,16 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     private static final int REQ_BLUETOOTH = 41;
+    private static final int REQ_PROJECTION = 42;
 
     private TextView status;
     private Button musicButton;
+    private Button saveButton;
     private ListView list;
     private TrackAdapter adapter;
     private List<Track> tracks = new ArrayList<Track>();
+    private boolean projectionRequested;
+    private long lastProjectionRequestAt;
 
     private final android.content.SharedPreferences.OnSharedPreferenceChangeListener libraryListener =
             new android.content.SharedPreferences.OnSharedPreferenceChangeListener() {
@@ -160,6 +165,18 @@ public class MainActivity extends Activity {
         footer.addView(logsButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        saveButton = new Button(this);
+        saveButton.setText("Save");
+        saveButton.setAllCaps(false);
+        saveButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleSaving();
+            }
+        });
+        footer.addView(saveButton, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
         root.addView(footer);
         setContentView(root);
 
@@ -206,6 +223,7 @@ public class MainActivity extends Activity {
         refreshList();
         refreshUi();
         requestBluetoothPermission();
+        maybeRequestSaving();
     }
 
     @Override
@@ -220,7 +238,8 @@ public class MainActivity extends Activity {
         }
         Logs.i("BravePlayUI", "intent music=" + intent.hasExtra("music")
                 + " index=" + intent.getIntExtra("index", 0)
-                + " url=" + intent.getStringExtra("url"));
+                + " url=" + intent.getStringExtra("url")
+                + " record=" + intent.hasExtra("record"));
         boolean hasMusic = intent.hasExtra("music");
         if (hasMusic) {
             Library.prefs(this).edit()
@@ -246,12 +265,123 @@ public class MainActivity extends Activity {
                 selectTrack(index - 1);
             }
         }
+        if (intent.getBooleanExtra("record", false)) {
+            status.post(new Runnable() {
+                @Override
+                public void run() {
+                    toggleSaving();
+                }
+            });
+        }
         // Extra handling is one-shot: don't act on these again after a recreation.
         intent.removeExtra("music");
         intent.removeExtra("index");
         intent.removeExtra("url");
+        intent.removeExtra("record");
         refreshList();
         refreshUi();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PROJECTION) {
+            return;
+        }
+        projectionRequested = false;
+        if (resultCode == RESULT_OK && data != null) {
+            RecorderService.start(this, resultCode, data);
+            Toast.makeText(this, "Saving songs locally from now on",
+                    Toast.LENGTH_SHORT).show();
+            Logs.i("BravePlayUI", "local recording enabled");
+            status.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    refreshUi();
+                }
+            }, 800L);
+        } else {
+            Library.prefs(this).edit()
+                    .putBoolean(Library.KEY_RECORD_LOCAL, false).apply();
+            Toast.makeText(this, "Not allowed - songs will play from Brave",
+                    Toast.LENGTH_LONG).show();
+            Logs.w("BravePlayUI", "local recording denied");
+        }
+        refreshUi();
+    }
+
+    /**
+     * Starts/stops saving songs. Android requires a fresh capture consent for each app
+     * process, so after a restart the consent prompt is shown automatically while MUSIC ON.
+     */
+    private void toggleSaving() {
+        if (RecorderService.isRunning()) {
+            RecorderService.stop(this);
+            Logs.i("BravePlayUI", "local recording stopped");
+            Toast.makeText(this, "Stopped saving new songs", Toast.LENGTH_SHORT).show();
+            refreshUi();
+            return;
+        }
+        requestProjection();
+    }
+
+    private void requestProjection() {
+        if (RecorderService.isRunning() || projectionRequested) {
+            return;
+        }
+        try {
+            MediaProjectionManager manager = (MediaProjectionManager)
+                    getSystemService(MEDIA_PROJECTION_SERVICE);
+            if (manager == null) {
+                Toast.makeText(this, "Screen capture is not available",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            projectionRequested = true;
+            lastProjectionRequestAt = System.currentTimeMillis();
+            startActivityForResult(manager.createScreenCaptureIntent(), REQ_PROJECTION);
+        } catch (Throwable t) {
+            projectionRequested = false;
+            Logs.w("BravePlayUI", "projection request: " + t);
+            Toast.makeText(this, "Could not ask for capture permission",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Recording is on by default and resumes automatically after a process restart. */
+    private boolean wantsSaving() {
+        return Library.prefs(this).getBoolean(Library.KEY_RECORD_LOCAL, true);
+    }
+
+    /**
+     * Android drops the capture token when the app process dies or a reboot happens. Ask for
+     * it again while the app is open and MUSIC ON, instead of silently saving nothing.
+     */
+    private void maybeRequestSaving() {
+        if (!isMusicOn() || RecorderService.isRunning() || projectionRequested
+                || !wantsSaving()) {
+            return;
+        }
+        if (System.currentTimeMillis() - lastProjectionRequestAt < 10 * 60_000L) {
+            return;
+        }
+        status.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (!isFinishing() && !RecorderService.isRunning()) {
+                    requestProjection();
+                }
+            }
+        }, 700L);
+    }
+
+    private String savedSummary() {
+        int count = LocalStore.count(this);
+        if (count == 0) {
+            return "No songs saved locally yet";
+        }
+        long mb = LocalStore.totalBytes(this) / (1024 * 1024);
+        return count + " song" + (count == 1 ? "" : "s") + " saved locally (" + mb + " MB)";
     }
 
     /** User picked this song on purpose: play it even if it was played recently. */
@@ -269,8 +399,21 @@ public class MainActivity extends Activity {
         Library.prefs(this).edit().putBoolean(Library.KEY_MUSIC_ON, on).apply();
         Logs.i("BravePlayUI", "music mode " + (on ? "ON" : "OFF"));
         if (!on) {
+            KeepAliveService.stop(this);
+            RecorderService.onMusicOff();
+            LocalPlayer.stop();
             refreshUi();
             Toast.makeText(this, "Music off", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        KeepAliveService.start(this);
+
+        // A saved copy is the most reliable way to keep playing: start it directly.
+        Track current = Library.current(this);
+        if (current != null && LocalStore.has(this, current.id)) {
+            Radio.play(this, current);
+            refreshUi();
+            Toast.makeText(this, "Music on - playing saved copy", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -320,6 +463,12 @@ public class MainActivity extends Activity {
         musicButton.setBackground(bg);
         musicButton.setTextColor(music ? Color.WHITE : Color.parseColor("#E8EAED"));
 
+        if (saveButton != null) {
+            boolean saving = RecorderService.isRunning();
+            boolean wanted = wantsSaving();
+            saveButton.setText(saving ? "Save: on" : (wanted ? "Save: paused" : "Save"));
+        }
+
         boolean helper = PlayClickerService.isEnabled(this);
         if (!helper) {
             status.setText("Auto-play helper off \u2013 enable \"Brave auto-play\" in Accessibility settings.");
@@ -328,13 +477,15 @@ public class MainActivity extends Activity {
         }
         status.setTextColor(Color.parseColor("#9AA0A6"));
         if (!music) {
-            status.setText("Music OFF \u2013 links open in Brave, nothing is played automatically.");
+            status.setText("Music OFF \u2013 links open in Brave, nothing is played automatically."
+                    + "\n" + savedSummary());
             return;
         }
         String now = nowPlaying();
         status.setText(now == null
                 ? "Music ON \u2013 starting..."
                 : "Music ON \u00B7 now: " + now
+                + "\n" + savedSummary()
                 + "\nNo repeats for 60 min \u00B7 volume kept up \u00B7 checked every 20 s.");
     }
 
@@ -501,13 +652,23 @@ public class MainActivity extends Activity {
     }
 
     private void requestBluetoothPermission() {
-        if (Build.VERSION.SDK_INT < 31) {
-            return;
-        }
-        if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+        List<String> wanted = new ArrayList<String>();
+        if (Build.VERSION.SDK_INT >= 31
+                && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
                 != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{android.Manifest.permission.BLUETOOTH_CONNECT},
-                    REQ_BLUETOOTH);
+            wanted.add(android.Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            wanted.add(android.Manifest.permission.POST_NOTIFICATIONS);
+        }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            wanted.add(android.Manifest.permission.RECORD_AUDIO);
+        }
+        if (!wanted.isEmpty()) {
+            requestPermissions(wanted.toArray(new String[0]), REQ_BLUETOOTH);
         }
     }
 
@@ -582,8 +743,12 @@ public class MainActivity extends Activity {
             Track track = tracks.get(position);
             number.setText(String.valueOf(position + 1));
             title.setText(track.displayTitle());
+            String saved = LocalStore.has(MainActivity.this, track.id)
+                    ? "  \u00B7  saved" : "";
             subtitle.setText(track.displayAuthor()
-                    + (track.durationSec > 0 ? "  \u00B7  " + duration(track.durationSec) : "  \u00B7  live"));
+                    + (track.durationSec > 0 ? "  \u00B7  " + duration(track.durationSec)
+                    : "  \u00B7  live")
+                    + saved);
 
             GradientDrawable bg = new GradientDrawable();
             bg.setColor(Color.parseColor(position % 2 == 0 ? "#1B1B22" : "#17171D"));
