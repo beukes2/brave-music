@@ -89,6 +89,8 @@ public final class Library {
             {"_ZdMxFiUf9Q", "Tuba Skinny - Jubilee Stomp - Royal Street II", "TheWsm", "231"},
             {"_tTber0f8qc", "Worakls - Salzburg", "Nicolas Cron", "363"},
             {"yDKve15Bwwo", "Rameses B - We Are One (ft.  Veela)", "Liquicity", "213"},
+            {"ATziyr7CqhU", "Lior Shoov \"A call for light\" - Shoot it #32 (Place Rouville Session)", "Shoot it", "292"},
+            {"f6QFfmwFT3k", "Trauma (Worakls Remix)", "NTO", "600"},
     };
 
     private static Map<String, String[]> metaById;
