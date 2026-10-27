@@ -106,6 +106,8 @@ public final class Urls {
             "https://www.youtube.com/watch?v=f6QFfmwFT3k",
             // 51
             "https://www.youtube.com/watch?v=2bPYEk_FGr0",
+            // 52
+            "https://www.youtube.com/watch?v=JHDNuLsIPKY",
     };
 
     private Urls() {
