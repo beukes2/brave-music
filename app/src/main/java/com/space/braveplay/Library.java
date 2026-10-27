@@ -98,6 +98,7 @@ public final class Library {
             {"QobkB1aJq9A", "Drewsif - What Makes You Beautiful (One Direction Metal Cover)", "Its Drewsif", "193"},
             {"bac0y2M2Eqo", "Miley Cyrus - Wrecking Ball (in the style of Linkin Park) feat. @macglocky", "Anthony Vincent", "220"},
             {"iOTcr9wKC-o", "Switchfoot - Dare You To Move (Alt. Version)", "Switchfoot", "241"},
+            {"IiVO1n63WUM", "PRIME CIRCLE - 'Out Of This Place' (OFFICIAL MUSIC VIDEO)", "PRIME CIRCLE | OFFICIAL", "249"},
     };
 
     private static Map<String, String[]> metaById;
