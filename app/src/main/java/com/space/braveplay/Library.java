@@ -91,6 +91,7 @@ public final class Library {
             {"yDKve15Bwwo", "Rameses B - We Are One (ft.  Veela)", "Liquicity", "213"},
             {"ATziyr7CqhU", "Lior Shoov \"A call for light\" - Shoot it #32 (Place Rouville Session)", "Shoot it", "292"},
             {"f6QFfmwFT3k", "Trauma (Worakls Remix)", "NTO", "600"},
+            {"2bPYEk_FGr0", "deadmau5 & Kiesza - Bridged By A Lightwave (Original Mix)", "deadmau5", "563"},
     };
 
     private static Map<String, String[]> metaById;
