@@ -60,6 +60,42 @@ public final class Urls {
             "https://www.youtube.com/watch?v=GUEZCxBcM78",
             // 28
             "https://www.youtube.com/watch?v=HwPOyqnqNEw",
+            // 29
+            "https://www.youtube.com/watch?v=UtypnWBopA0",
+            // 30
+            "https://www.youtube.com/watch?v=U9TW1PeoMm8",
+            // 31
+            "https://www.youtube.com/watch?v=kz5HM6Hz5k8",
+            // 32
+            "https://www.youtube.com/watch?v=_n5pDy1Rgqs",
+            // 33
+            "https://www.youtube.com/watch?v=r8RxevrNrbs",
+            // 34
+            "https://www.youtube.com/watch?v=4cbSPNZryzo",
+            // 35
+            "https://www.youtube.com/watch?v=2GADx4Hy-Gg",
+            // 36
+            "https://www.youtube.com/watch?v=7B4CLQGxHmI",
+            // 37
+            "https://www.youtube.com/watch?v=0W4eCEjagiM",
+            // 38
+            "https://www.youtube.com/watch?v=ULLPTxgephw",
+            // 39
+            "https://www.youtube.com/watch?v=4zlX5isfkpw",
+            // 40
+            "https://www.youtube.com/watch?v=cridXTGuDPg",
+            // 41
+            "https://www.youtube.com/watch?v=oO8fxCQvTKE",
+            // 42
+            "https://www.youtube.com/watch?v=OXcrEVFZOXs",
+            // 43
+            "https://www.youtube.com/watch?v=UfkbVBEeA3w",
+            // 44
+            "https://www.youtube.com/watch?v=4aeETEoNfOg",
+            // 45
+            "https://www.youtube.com/watch?v=z7hhDINyBP0",
+            // 46
+            "https://www.youtube.com/watch?v=_ZdMxFiUf9Q",
     };
 
     private Urls() {
