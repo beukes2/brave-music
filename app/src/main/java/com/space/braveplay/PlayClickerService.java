@@ -121,25 +121,6 @@ public class PlayClickerService extends AccessibilityService {
     private final ArrayDeque<String> previousUrls = new ArrayDeque<String>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
-    /**
-     * Runs once a second while MUSIC ON. The recorder uses this to start at the beginning
-     * of a song (the 5 s control tick would miss too much of the intro).
-     */
-    private final Runnable recorderTick = new Runnable() {
-        @Override
-        public void run() {
-            if (!isMusicOn()) {
-                return;
-            }
-            long now = SystemClock.uptimeMillis();
-            boolean local = LocalPlayer.isActive();
-            boolean playing = isMusicPlaying();
-            RecorderService.onPlayback(playing && !local, userPaused,
-                    currentPositionMs(playing, now));
-            handler.postDelayed(this, 1000L);
-        }
-    };
-
     private final Runnable ticker = new Runnable() {
         @Override
         public void run() {
@@ -177,7 +158,7 @@ public class PlayClickerService extends AccessibilityService {
                             stopTicker();
                             releaseMediaSession();
                             KeepAliveService.stop(PlayClickerService.this);
-                            RecorderService.onMusicOff();
+                            // Capture stays on: it is independent of MUSIC ON.
                             LocalPlayer.stop();
                         }
                     } else if (Library.KEY_URL.equals(key)) {
@@ -637,58 +618,21 @@ public class PlayClickerService extends AccessibilityService {
     /** The saved file's real length while it plays; YouTube's length otherwise. */
     private int currentDurationSeconds() {
         if (LocalPlayer.isActive()) {
+            String url = prefs.getString(Library.KEY_URL, "");
+            if (url.startsWith("local:")) {
+                // Autosaved videos can contain a loop or trailing silence. Their captured
+                // length is the real content, so use it instead of the whole file.
+                int stored = prefs.getInt(Library.KEY_DURATION, 0);
+                if (stored > 0) {
+                    return stored;
+                }
+            }
             int local = LocalPlayer.durationSeconds();
             if (local > 0) {
                 return local;
             }
         }
         return prefs.getInt(Library.KEY_DURATION, 0);
-    }
-
-    /**
-     * Playback position for the recorder. The app's own counter resets when the
-     * accessibility service reconnects, so prefer Brave's real position when the media
-     * session is showing the current song. A position well above zero means the recorder
-     * is starting mid-song and must not keep that fragment as a "complete" copy.
-     */
-    private long currentPositionMs(boolean playing, long now) {
-        long position = effectivePlayedMs(playing, now);
-        MediaController brave = braveController();
-        if (brave == null) {
-            return position;
-        }
-        try {
-            PlaybackState state = brave.getPlaybackState();
-            if (state == null || state.getState() != PlaybackState.STATE_PLAYING) {
-                return position;
-            }
-            MediaMetadata meta = brave.getMetadata();
-            Track current = Library.current(this);
-            if (meta == null || current == null) {
-                return position;
-            }
-            String mediaId = meta.getString(MediaMetadata.METADATA_KEY_MEDIA_ID);
-            String title = meta.getString(MediaMetadata.METADATA_KEY_TITLE);
-            if ((mediaId != null && mediaId.equals(current.id))
-                    || titlesMatch(title, current.title)) {
-                return Math.max(position, state.getPosition());
-            }
-        } catch (Throwable t) {
-            Logs.w(TAG, "position: " + t);
-        }
-        return position;
-    }
-
-    private boolean titlesMatch(String fromBrave, String fromLibrary) {
-        if (fromBrave == null || fromLibrary == null) {
-            return false;
-        }
-        String a = fromBrave.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
-        String b = fromLibrary.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
-        if (a.length() < 4 || b.length() < 4) {
-            return false;
-        }
-        return a.equals(b) || a.contains(b) || b.contains(a);
     }
 
     private void resetProgress(String url) {
@@ -707,7 +651,6 @@ public class PlayClickerService extends AccessibilityService {
         }
         Logs.i(TAG, "now playing: " + (track == null ? Urls.videoId(trackedUrl)
                 : "\"" + track.displayTitle() + "\" (" + track.id + ")"));
-        RecorderService.onTrackSelected(this, track);
     }
 
     /** Picks the next song off the UI thread and starts it. */
@@ -1392,13 +1335,10 @@ public class PlayClickerService extends AccessibilityService {
     private void startTicker() {
         handler.removeCallbacks(ticker);
         handler.post(ticker);
-        handler.removeCallbacks(recorderTick);
-        handler.post(recorderTick);
     }
 
     private void stopTicker() {
         handler.removeCallbacks(ticker);
-        handler.removeCallbacks(recorderTick);
     }
 
     private void registerScreenReceiver() {

@@ -51,18 +51,27 @@ public final class Radio {
         // Prefer a song that was already recorded: it plays with the screen off and the
         // phone locked, and needs neither Brave nor the accessibility service.
         if (LocalPlayer.play(context, track)) {
-            int localSeconds = LocalPlayer.durationSeconds();
-            if (localSeconds > 0) {
-                // The saved file includes a little lead-in/out; using its real length keeps
-                // the rotation from cutting the song early.
-                Library.prefs(context).edit()
-                        .putInt(Library.KEY_DURATION, localSeconds).apply();
+            if (!track.isLocalOnly()) {
+                int localSeconds = LocalPlayer.durationSeconds();
+                if (localSeconds > 0) {
+                    // The saved file includes a little lead-in/out; using its real length
+                    // keeps the rotation from cutting the song early. Local-only autosaves
+                    // keep their captured length so silence/loops are not played.
+                    Library.prefs(context).edit()
+                            .putInt(Library.KEY_DURATION, localSeconds).apply();
+                }
             }
             pauseBrave(context);
             Logs.i(TAG, "using saved local copy");
             return;
         }
         LocalPlayer.stop();
+        if (track.isLocalOnly()) {
+            // There is no web URL to fall back to for a video that only exists as a saved
+            // file. Never open Brave for it, even if its file disappeared.
+            Logs.w(TAG, "local-only track has no playable file: " + track.id);
+            return;
+        }
         launch(context, track.url);
     }
 
@@ -124,6 +133,10 @@ public final class Radio {
     }
 
     public static void launch(Context context, String url) {
+        if (url == null || url.isEmpty() || url.startsWith("local:")) {
+            Logs.w(TAG, "refusing to open a non-web URL: " + url);
+            return;
+        }
         Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
         view.addCategory(Intent.CATEGORY_BROWSABLE);
         String brave = findBrave(context);

@@ -1,32 +1,46 @@
 # Brave Music
 
 Small Android app that keeps YouTube music playing in **Brave** on the phone, one song
-after another, without repeats. It also **records every song it plays** and plays the
-saved copy from then on, so the music keeps going with the screen off and the phone
-locked – no browser needed.
+after another, without repeats. It also **saves every song/video played in Brave** –
+whether the radio started it or you opened it yourself – and plays saved copies locally,
+so the music keeps going with the screen off and the phone locked – no browser needed.
 
-## Saved music (offline copies)
+## Saved music and videos (offline copies)
 
-While **MUSIC ON**, the app records the audio Brave is playing into its private storage,
-one `.m4a` file per song (`files/music/<video-id>.m4a`). The next time that song is
-chosen, the saved copy is played instead of opening Brave. Saved rows say **saved**.
+Capture is **always on** once the one-time consent is granted, independent of the big
+MUSIC ON/OFF button. The app watches Brave's media session and records the audio into its
+private storage, one `.m4a` file per video (`files/music/<video-id>.m4a`). Radio songs
+keep their video id; a video that is not in the list gets a stable `auto-<hash>` id and a
+`local:` URL, and is added to the list automatically when the recording is saved. Saved
+rows say **saved**; the next time the song is chosen, the saved copy is played instead of
+opening Brave.
 
-- Android requires a one-time **screen/audio capture consent** for this. The app asks for
-  it automatically the first time it runs with MUSIC ON (and again after the app process
-  is restarted or the phone reboots). Tap **Start now / Allow**. The **Save** button at
-  the bottom shows the state: `Save: on`, `Save: paused` (consent needed) or `Save` (off).
-- Only complete songs are kept: a song that was skipped, paused, or started halfway
-  through is discarded. Live streams are not recorded. The first song after granting
-  consent is usually discarded because it may already be half over.
-- Saved songs play through the phone's normal media output (speaker, Bluetooth, car),
-  with a wake lock, and need neither Brave nor the accessibility service. That is why
-  they keep playing when the screen is off and the phone is locked.
-- Files are capped at **2 GB total**; the oldest are deleted first. Nothing is uploaded.
+- Android requires a **screen/audio capture consent** for this. The app asks for it
+  automatically whenever it comes to the foreground, regardless of MUSIC ON/OFF (and
+  again after the app process is restarted or the phone reboots). Tap **Start now /
+  Allow**. The **Save** button at the bottom is an always-on status/consent control:
+  `Save: on`, or `Save: paused` when Android needs the tap again. Tapping it while it is
+  already on does **not** stop capture; denying the dialog keeps saving enabled and the
+  app retries later.
+- Only complete copies are kept. When Brave publishes the length, at least **70 %** of
+  the video must have been watched; otherwise the file is discarded. For an unknown
+  length the minimum is **30 s** and the file is closed on a pause, session change or
+  long idle. A recording that starts more than **20 s** into a video is treated as a
+  fragment and discarded. A looping page is closed at the end of the first pass instead
+  of saving repeated audio. The built-in endless lofi stream is skipped; ordinary
+  unknown-length videos are still saved. The first video after granting consent is
+  usually discarded if it was already half over.
+- Saved music/videos play through the phone's normal media output (speaker, Bluetooth,
+  car), with a wake lock, and need neither Brave nor the accessibility service. That is
+  why they keep playing when the screen is off and the phone is locked. A saved
+  `local:` row never opens Brave, even if its file is missing – it is skipped instead.
+- Files are capped at **2 GB total**; the oldest are deleted first, and a deleted
+  `local:` video is removed from the list too. Nothing is uploaded.
 - Saved songs still obey the one-hour no-repeat rule and still show on the car display.
 
 If Android ever says the capture token is stale (for example after a reboot), open the
-app while MUSIC ON and accept the prompt again. The app cannot show that system dialog
-from the background.
+app and accept the prompt again. The app cannot show that system dialog from the
+background.
 
 ## The big toggle
 
@@ -36,8 +50,8 @@ from the background.
     (tapping a row yourself always plays it, even if it was played recently),
   - when every link has been played, **finds another song of the same genre** on YouTube,
     adds it to the list and plays it,
-  - **records songs that are not saved yet** and plays saved copies instead of Brave
-    (see above),
+  - plays saved copies instead of Brave. Recording is **not** tied to MUSIC ON: the
+    capture service saves anything you play in Brave in the background (see above),
   - keeps the **media volume above 0** (checked every 5 s and whenever the volume
     changes, plus the media stream is unmuted) – turning the volume to zero is undone,
   - keeps **Bluetooth on** (Android 13+ blocks apps from enabling it directly, so the app
@@ -53,9 +67,10 @@ from the background.
     audio focus and never makes a sound. This needs the one-time *notification access*
     that `install.ps1` grants; without it the buttons stay with Brave.),
   - holds a partial wake lock and both apps are battery-whitelisted by `install.ps1`.
-- **MUSIC OFF** (big grey button) – the app only opens links you tap; the keeper does
-  nothing at all (no taps, no volume changes, no Bluetooth changes, nothing started in
-  the background). A locally playing song is stopped too.
+- **MUSIC OFF** (big grey button) – the radio/keeper does nothing: it only opens links
+  you tap (no auto-play taps, no volume changes, no Bluetooth changes, no rotation), and
+  a locally playing song is stopped. **Capture stays on** and videos you play in Brave
+  are still saved.
 
 
 The list shows the real **song titles** (and channel + length). Built-in titles are stored
@@ -72,10 +87,12 @@ streams (no length) are never cut off by the rotation.
   the Bluetooth access used to keep Bluetooth on. `install.ps1` grants it over adb too.
 - **Add link** (bottom-left) stores extra links without rebuilding; long-press an added
   row to delete it. Several links can be pasted at once (separated by spaces/newlines).
-- **Save** (bottom-right, next to Logs) turns local recording on/off and shows whether the
-  capture token is currently active: `Save: on`, `Save: paused` (tap to grant again) or
-  `Save`. Saving is on by default, so normally you do not need to touch it – the consent
-  prompt appears on its own while MUSIC ON.
+- **Save** (bottom-right, next to Logs) is an always-on status/consent control. It shows
+  `Save: on` while capture is running and `Save: paused` when Android needs the consent
+  tap again; tapping a paused button asks for it. Tapping `Save: on` only shows a
+  reminder – it does not stop capture. The consent prompt appears by itself whenever the
+  app comes to the foreground, even with MUSIC OFF. Videos you open in Brave yourself are
+  saved too, not just the radio's songs.
 - **Logs** (next to Save) shows the last 400 lines of the app log and can copy them.
   The same log lives in `files/app.log` (rolling, 1 MB):
 
@@ -138,7 +155,8 @@ audio while the capture consent is active, never the microphone itself.
   one-hour play history (shared preferences `brave_play`).
 - `Radio` – picks the next song: next entry that was not played in the last hour, else a
   newly discovered song, else the least recently played one. Plays the saved `.m4a` if
-  there is one, otherwise opens the song in Brave.
+  there is one, otherwise opens the song in Brave. A `local:` row with no file is skipped
+  rather than opened in Brave.
 - `Discover` – asks YouTube for songs of the same artist/genre (using the song's author
   and title), checks their real title/length and stores the one that is picked.
 - `PlayClickerService` – accessibility service that only watches Brave. It taps exactly
@@ -149,14 +167,19 @@ audio while the capture consent is active, never the microphone itself.
   next/previous/play/pause buttons and a silent keep-alive track so Android hands it the
   media keys. While a saved copy is playing it pauses Brave and forwards the buttons to
   the local player.
-- `RecorderService` – foreground service (`mediaProjection`) that follows the current
-  song. It keeps a file only when at least 30 s **and** 70 % of the song was captured;
-  skipped, paused or mid-song starts are discarded. Live streams are skipped. It keeps
-  the newest 2 GB and deletes the oldest files first.
+- `RecorderService` – foreground service (`mediaProjection`) that watches Brave's media
+  session about once a second, independent of MUSIC ON. It follows title/artist/duration
+  changes, starts a file 3 s after a video becomes audible, adopts a length that YouTube
+  publishes a few seconds late, and closes the file on end, pause, loop, session loss or
+  track change. It keeps a file only when at least 30 s **and** (for a known length) 70 %
+  of the video was watched; starts later than 20 s, skipped fragments and the built-in
+  live stream are discarded. Finished non-library videos are added to the list as
+  `local:auto-…` rows. It keeps the newest 2 GB and deletes the oldest files first.
 - `AacRecorder` – `AudioPlaybackCapture` filtered to Brave's UID, encoded to AAC-LC
   128 kbit/s stereo in an `.m4a` container.
 - `LocalPlayer` / `LocalStore` – `MediaPlayer` with a partial wake lock. This path needs
-  no browser, no accessibility and no unlocked screen.
+  no browser, no accessibility and no unlocked screen. Local-only rows are removed when
+  their files are pruned or missing, and are never opened in Brave.
 - `KeepAliveService` – low-priority foreground service that keeps the process alive.
 - The keeper checks every 5 s. While playing it reads Brave's own media session (speed 0
   means Chromium paused, even though it still says "playing"), so the silent keep-alive
@@ -200,6 +223,7 @@ Lock → Trusted devices → MY-CAR**) keeps the phone unlocked in the car; the 
 disable the lock screen itself.
 
 After a reboot, or if Android kills the app process, Android requires the capture consent
-again. Open the app while MUSIC ON and accept the prompt; the foreground services make
-this rare, but Android does not allow an app to grant it from the background.
+again. Open the app (MUSIC ON or OFF) and accept the prompt; the foreground services make
+this rare, but Android does not allow an app to grant it from the background. This is the
+one part of “always-on capture” Android will not let the app do without a tap.
 

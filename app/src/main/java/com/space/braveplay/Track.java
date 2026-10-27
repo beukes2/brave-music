@@ -18,6 +18,11 @@ public final class Track {
         this.durationSec = Math.max(0, durationSec);
     }
 
+    /** True when the only playable source is the saved file (there is no web URL). */
+    public boolean isLocalOnly() {
+        return url == null || url.isEmpty() || url.startsWith("local:");
+    }
+
     public String displayTitle() {
         return title.isEmpty() ? id : title;
     }

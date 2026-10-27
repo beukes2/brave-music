@@ -86,6 +86,17 @@ public final class LocalStore {
         part(context, id).delete();
     }
 
+    /** Removes the saved copy of a track, for example when the user deletes its row. */
+    public static void delete(Context context, String id) {
+        if (id == null || id.isEmpty()) {
+            return;
+        }
+        //noinspection ResultOfMethodCallIgnored
+        file(context, id).delete();
+        //noinspection ResultOfMethodCallIgnored
+        part(context, id).delete();
+    }
+
     public static int count(Context context) {
         File[] files = dir(context).listFiles();
         if (files == null) {
@@ -135,6 +146,7 @@ public final class LocalStore {
                 return Long.compare(a.lastModified(), b.lastModified());
             }
         });
+        boolean removed = false;
         for (File file : files) {
             if (total <= MAX_BYTES) {
                 break;
@@ -145,9 +157,14 @@ public final class LocalStore {
             long length = file.length();
             if (file.delete()) {
                 total -= length;
+                removed = true;
                 Logs.i("BravePlayLocal", "pruned " + file.getName() + " ("
                         + (length / (1024 * 1024)) + " MB)");
             }
+        }
+        if (removed) {
+            // Autosaved videos only exist as files, so their library rows must go too.
+            Library.removeLocalOnlyMissing(context);
         }
     }
 }

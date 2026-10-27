@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -35,7 +36,7 @@ public final class Library {
     /** Repeat window: the same song is not chosen again for an hour. */
     public static final long REPEAT_WINDOW_MS = 60 * 60 * 1000L;
 
-    private static final String KEY_CUSTOM = "custom_tracks";
+    public static final String KEY_CUSTOM = "custom_tracks";
     private static final String KEY_HISTORY = "history";
 
     /** id, title, author, duration (s). 0 = live stream. */
@@ -147,6 +148,67 @@ public final class Library {
         return null;
     }
 
+    /**
+     * Finds the library entry for a title reported by Brave's media session. Used by the
+     * recorder so a radio song keeps its real video id instead of becoming a duplicate.
+     */
+    public static Track findByTitle(Context context, String title) {
+        if (title == null || title.trim().isEmpty()) {
+            return null;
+        }
+        List<Track> matches = new ArrayList<Track>();
+        for (Track track : all(context)) {
+            if (titlesMatch(track.title, title)) {
+                matches.add(track);
+            }
+        }
+        if (matches.isEmpty()) {
+            return null;
+        }
+        // Prefer an entry that is already saved locally, then an exact title.
+        for (Track track : matches) {
+            if (LocalStore.has(context, track.id)) {
+                return track;
+            }
+        }
+        String wanted = normalizeTitle(title);
+        for (Track track : matches) {
+            if (normalizeTitle(track.title).equals(wanted)) {
+                return track;
+            }
+        }
+        return matches.get(0);
+    }
+
+    /** A local-only entry is playable only while its file exists. */
+    public static boolean isPlayable(Context context, Track track) {
+        if (track == null) {
+            return false;
+        }
+        if (track.isLocalOnly()) {
+            return LocalStore.has(context, track.id);
+        }
+        return true;
+    }
+
+    /** Drops recorded entries whose files were pruned or deleted. */
+    public static void removeLocalOnlyMissing(Context context) {
+        List<Track> custom = custom(context);
+        List<Track> kept = new ArrayList<Track>();
+        int removed = 0;
+        for (Track track : custom) {
+            if (track.isLocalOnly() && !LocalStore.has(context, track.id)) {
+                removed++;
+                Logs.i("BravePlayLibrary", "removing missing local video \"" + track.title + "\"");
+            } else {
+                kept.add(track);
+            }
+        }
+        if (removed > 0) {
+            saveCustom(context, kept);
+        }
+    }
+
     /** Currently playing track, synth esised from prefs when it is not in the list. */
     public static Track current(Context context) {
         SharedPreferences p = prefs(context);
@@ -197,6 +259,11 @@ public final class Library {
         List<Track> kept = new ArrayList<Track>();
         int removed = 0;
         for (Track track : custom) {
+            if (track.isLocalOnly()) {
+                // A recorded video is not a discovered Short; never delete it here.
+                kept.add(track);
+                continue;
+            }
             if (track.durationSec > 0 && track.durationSec < 45) {
                 removed++;
                 Logs.i("BravePlayLibrary", "removing clip \"" + track.displayTitle()
@@ -217,7 +284,10 @@ public final class Library {
         if (index < 0 || index >= custom.size()) {
             return;
         }
-        custom.remove(index);
+        Track removed = custom.remove(index);
+        if (removed.isLocalOnly()) {
+            LocalStore.delete(context, removed.id);
+        }
         saveCustom(context, custom);
     }
 
@@ -254,6 +324,9 @@ public final class Library {
             if (current != null && candidate.id.equals(current.id)) {
                 continue;
             }
+            if (!isPlayable(context, candidate)) {
+                continue;
+            }
             if (!playedRecently(context, candidate.id)) {
                 return candidate;
             }
@@ -268,6 +341,9 @@ public final class Library {
         Track best = null;
         long bestAt = Long.MAX_VALUE;
         for (Track track : tracks) {
+            if (!isPlayable(context, track)) {
+                continue;
+            }
             Long at = history.get(track.id);
             long when = at == null ? 0L : at;
             if (when < bestAt) {
@@ -344,6 +420,27 @@ public final class Library {
 
     private static String clean(String value) {
         return value == null ? "" : value.replace('\t', ' ').replace('\n', ' ');
+    }
+
+    private static String normalizeTitle(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT)
+                .replace("&amp;", "&")
+                .replace("&#39;", "'")
+                .replace("&quot;", "\"")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private static boolean titlesMatch(String a, String b) {
+        String x = normalizeTitle(a);
+        String y = normalizeTitle(b);
+        if (x.length() < 6 || y.length() < 6) {
+            return false;
+        }
+        return x.equals(y) || x.contains(y) || y.contains(x);
     }
 
     private static int parseInt(String value) {

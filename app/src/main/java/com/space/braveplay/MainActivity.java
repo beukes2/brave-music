@@ -70,7 +70,8 @@ public class MainActivity extends Activity {
                 @Override
                 public void onSharedPreferenceChanged(android.content.SharedPreferences sp,
                                                       String key) {
-                    if (Library.KEY_URL.equals(key) || Library.KEY_MUSIC_ON.equals(key)) {
+                    if (Library.KEY_URL.equals(key) || Library.KEY_MUSIC_ON.equals(key)
+                            || Library.KEY_CUSTOM.equals(key)) {
                         refreshList();
                         refreshUi();
                     }
@@ -220,9 +221,12 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         Library.prefs(this).registerOnSharedPreferenceChangeListener(libraryListener);
+        Library.removeLocalOnlyMissing(this);
         refreshList();
         refreshUi();
         requestBluetoothPermission();
+        // Capture is always on (independent of MUSIC ON). Android forgets the consent when
+        // the process dies, so ask again whenever the app comes back to the foreground.
         maybeRequestSaving();
     }
 
@@ -291,9 +295,9 @@ public class MainActivity extends Activity {
         projectionRequested = false;
         if (resultCode == RESULT_OK && data != null) {
             RecorderService.start(this, resultCode, data);
-            Toast.makeText(this, "Saving songs locally from now on",
+            Toast.makeText(this, "Capture on - every video you play in Brave is saved",
                     Toast.LENGTH_SHORT).show();
-            Logs.i("BravePlayUI", "local recording enabled");
+            Logs.i("BravePlayUI", "always-on capture enabled");
             status.postDelayed(new Runnable() {
                 @Override
                 public void run() {
@@ -301,24 +305,24 @@ public class MainActivity extends Activity {
                 }
             }, 800L);
         } else {
-            Library.prefs(this).edit()
-                    .putBoolean(Library.KEY_RECORD_LOCAL, false).apply();
-            Toast.makeText(this, "Not allowed - songs will play from Brave",
+            // Keep the preference true: the permission is only temporarily missing, and the
+            // app will ask again instead of silently deciding that saving is off.
+            Toast.makeText(this, "Capture paused - tap Save to allow saving",
                     Toast.LENGTH_LONG).show();
-            Logs.w("BravePlayUI", "local recording denied");
+            Logs.w("BravePlayUI", "capture consent denied; will retry");
         }
         refreshUi();
     }
 
     /**
-     * Starts/stops saving songs. Android requires a fresh capture consent for each app
-     * process, so after a restart the consent prompt is shown automatically while MUSIC ON.
+     * Save is an always-on status/consent control. Android requires a fresh capture consent
+     * for each app process, so tapping it (or opening the app) only asks for that permission;
+     * it never turns capture off.
      */
     private void toggleSaving() {
         if (RecorderService.isRunning()) {
-            RecorderService.stop(this);
-            Logs.i("BravePlayUI", "local recording stopped");
-            Toast.makeText(this, "Stopped saving new songs", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Capture is always on while Brave Music is allowed",
+                    Toast.LENGTH_SHORT).show();
             refreshUi();
             return;
         }
@@ -348,18 +352,12 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Recording is on by default and resumes automatically after a process restart. */
-    private boolean wantsSaving() {
-        return Library.prefs(this).getBoolean(Library.KEY_RECORD_LOCAL, true);
-    }
-
     /**
-     * Android drops the capture token when the app process dies or a reboot happens. Ask for
-     * it again while the app is open and MUSIC ON, instead of silently saving nothing.
+     * Capture is always wanted. Android drops the capture token when the app process dies or
+     * a reboot happens, so ask for it again whenever the app is open, regardless of MUSIC ON.
      */
     private void maybeRequestSaving() {
-        if (!isMusicOn() || RecorderService.isRunning() || projectionRequested
-                || !wantsSaving()) {
+        if (RecorderService.isRunning() || projectionRequested) {
             return;
         }
         if (System.currentTimeMillis() - lastProjectionRequestAt < 10 * 60_000L) {
@@ -368,7 +366,7 @@ public class MainActivity extends Activity {
         status.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (!isFinishing() && !RecorderService.isRunning()) {
+                if (!isFinishing() && !isDestroyed() && !RecorderService.isRunning()) {
                     requestProjection();
                 }
             }
@@ -378,10 +376,10 @@ public class MainActivity extends Activity {
     private String savedSummary() {
         int count = LocalStore.count(this);
         if (count == 0) {
-            return "No songs saved locally yet";
+            return "No songs or videos saved locally yet";
         }
         long mb = LocalStore.totalBytes(this) / (1024 * 1024);
-        return count + " song" + (count == 1 ? "" : "s") + " saved locally (" + mb + " MB)";
+        return count + " item" + (count == 1 ? "" : "s") + " saved locally (" + mb + " MB)";
     }
 
     /** User picked this song on purpose: play it even if it was played recently. */
@@ -400,10 +398,10 @@ public class MainActivity extends Activity {
         Logs.i("BravePlayUI", "music mode " + (on ? "ON" : "OFF"));
         if (!on) {
             KeepAliveService.stop(this);
-            RecorderService.onMusicOff();
+            // MUSIC OFF stops the radio/local player only; capture keeps watching Brave.
             LocalPlayer.stop();
             refreshUi();
-            Toast.makeText(this, "Music off", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Music off - capture is still on", Toast.LENGTH_SHORT).show();
             return;
         }
         KeepAliveService.start(this);
@@ -463,21 +461,26 @@ public class MainActivity extends Activity {
         musicButton.setBackground(bg);
         musicButton.setTextColor(music ? Color.WHITE : Color.parseColor("#E8EAED"));
 
+        boolean saving = RecorderService.isRunning();
         if (saveButton != null) {
-            boolean saving = RecorderService.isRunning();
-            boolean wanted = wantsSaving();
-            saveButton.setText(saving ? "Save: on" : (wanted ? "Save: paused" : "Save"));
+            saveButton.setText(saving ? "Save: on" : "Save: paused");
         }
+        String capture = saving
+                ? "Capture on: every video you play in Brave is saved locally."
+                : "Capture paused: tap Save so Android can allow saving.";
 
         boolean helper = PlayClickerService.isEnabled(this);
         if (!helper) {
-            status.setText("Auto-play helper off \u2013 enable \"Brave auto-play\" in Accessibility settings.");
+            status.setText("Auto-play helper off \u2013 enable \"Brave auto-play\" in Accessibility settings."
+                    + "\n" + capture
+                    + "\n" + savedSummary());
             status.setTextColor(Color.parseColor("#FFB4A2"));
             return;
         }
         status.setTextColor(Color.parseColor("#9AA0A6"));
         if (!music) {
             status.setText("Music OFF \u2013 links open in Brave, nothing is played automatically."
+                    + "\n" + capture
                     + "\n" + savedSummary());
             return;
         }
@@ -485,8 +488,9 @@ public class MainActivity extends Activity {
         status.setText(now == null
                 ? "Music ON \u2013 starting..."
                 : "Music ON \u00B7 now: " + now
+                + "\n" + capture
                 + "\n" + savedSummary()
-                + "\nNo repeats for 60 min \u00B7 volume kept up \u00B7 checked every 20 s.");
+                + "\nNo repeats for 60 min \u00B7 volume kept up \u00B7 checked every 5 s.");
     }
 
     private String nowPlaying() {
