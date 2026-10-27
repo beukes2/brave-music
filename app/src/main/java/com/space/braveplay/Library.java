@@ -87,6 +87,8 @@ public final class Library {
             {"4aeETEoNfOg", "The Smashing Pumpkins - 1979 (Official Music Video)", "Smashing Pumpkins", "261"},
             {"z7hhDINyBP0", "blink-182 - The Rock Show", "blink-182", "188"},
             {"_ZdMxFiUf9Q", "Tuba Skinny - Jubilee Stomp - Royal Street II", "TheWsm", "231"},
+            {"_tTber0f8qc", "Worakls - Salzburg", "Nicolas Cron", "363"},
+            {"yDKve15Bwwo", "Rameses B - We Are One (ft.  Veela)", "Liquicity", "213"},
     };
 
     private static Map<String, String[]> metaById;
