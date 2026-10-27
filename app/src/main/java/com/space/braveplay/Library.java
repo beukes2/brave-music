@@ -97,7 +97,6 @@ public final class Library {
             {"MbWOQHm2vPE", "Hide & Seek (by Imogen Heap) - Metal Remix", "Artificial Degenerate", "320"},
             {"QobkB1aJq9A", "Drewsif - What Makes You Beautiful (One Direction Metal Cover)", "Its Drewsif", "193"},
             {"bac0y2M2Eqo", "Miley Cyrus - Wrecking Ball (in the style of Linkin Park) feat. @macglocky", "Anthony Vincent", "220"},
-            {"_AGYdfip4x0", "Twenty One Pilots- HEATHENS MEGAMIX (Panic! At the disco, Melanie, Arctic Monkeys)", "Amanda", "194"},
             {"iOTcr9wKC-o", "Switchfoot - Dare You To Move (Alt. Version)", "Switchfoot", "241"},
     };
 
