@@ -94,6 +94,7 @@ public final class Library {
             {"2bPYEk_FGr0", "deadmau5 & Kiesza - Bridged By A Lightwave (Original Mix)", "deadmau5", "563"},
             {"JHDNuLsIPKY", "Enya - Caribbean Blue (2021 Remix) - Remixed by Don Pelletier", "Don Pelletier - Enya Remixes", "246"},
             {"bRS2A0tQhyg", "underscores - headlock (imogen heap cover)", "milk", "252"},
+            {"MbWOQHm2vPE", "Hide & Seek (by Imogen Heap) - Metal Remix", "Artificial Degenerate", "320"},
     };
 
     private static Map<String, String[]> metaById;
