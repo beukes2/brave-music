@@ -4,6 +4,7 @@ Small Android app that keeps YouTube music playing in **Brave** on the phone, on
 after another, without repeats. It also **saves every song/video played in Brave** –
 whether the radio started it or you opened it yourself – and plays saved copies locally,
 so the music keeps going with the screen off and the phone locked – no browser needed.
+A **screen LOCK** ignores accidental touches while the phone is mounted or in a pocket.
 
 ## Saved music and videos (offline copies)
 
@@ -72,6 +73,26 @@ background.
   a locally playing song is stopped. **Capture stays on** and videos you play in Brave
   are still saved.
 
+## Screen lock for cycling
+
+The **LOCK** button below the status line is a touch guard for the phone mount. Tap it
+once and all other controls on the app are disabled (MUSIC ON/OFF, every row in the song
+list, Add link, Settings, Logs and Save). The button turns amber and reads **LOCKED**.
+Touching anywhere else on the screen does nothing: it cannot stop the music, skip a song,
+scroll the list or open a dialog. The system Back gesture is ignored as well.
+
+- **Unlock:** press and hold the same button for **2 seconds** (it shows “hold 2 s to
+  unlock” while held). A short tap just shows a reminder; it does not unlock.
+- The screen is kept awake while locked, so the app stays visible on the mount. Locking
+  does not touch the player, the radio or the Bluetooth media session; next/previous and
+  play/pause from the car, headset or steering wheel keep working normally. A media button
+  that picks an unsaved song may still open Brave, exactly as it normally does.
+- Capture keeps running while locked. The lock survives a rotation/activity rebuild; a
+  fresh app start begins unlocked.
+
+The app cannot block the phone's power button or system navigation, only touches inside
+Brave Music.
+
 
 The list shows the real **song titles** (and channel + length). Built-in titles are stored
 in the app; titles of links you add are looked up automatically.
@@ -83,6 +104,8 @@ streams (no length) are never cut off by the rotation.
 
 - On the phone: open **Brave Music**, tap the big **MUSIC ON** button. Tap a row to play
   that song immediately; the list turns the current song green.
+- Tap **LOCK** under the status line to ignore accidental screen touches while cycling;
+  hold it for 2 seconds to unlock. See [Screen lock for cycling](#screen-lock-for-cycling).
 - If Android asks for the *Nearby devices* permission on first launch, allow it – that is
   the Bluetooth access used to keep Bluetooth on. `install.ps1` grants it over adb too.
 - **Add link** (bottom-left) stores extra links without rebuilding; long-press an added
@@ -150,7 +173,8 @@ audio while the capture consent is active, never the microphone itself.
 ## How it works
 
 - `MainActivity` – big toggle, song list with real titles and **saved** markers, “Add
-  link”, “Save”, logs.
+  link”, “Save”, logs, and the cycling **LOCK** guard (tap to lock, 2 s hold to unlock;
+  disables every other control and keeps the screen awake while locked).
 - `Library` – built-in list, links added by you, songs found automatically, and the
   one-hour play history (shared preferences `brave_play`).
 - `Radio` – picks the next song: next entry that was not played in the last hour, else a

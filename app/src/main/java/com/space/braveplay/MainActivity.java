@@ -20,8 +20,11 @@ import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.TypedValue;
+import android.view.HapticFeedbackConstants;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.Button;
@@ -55,15 +58,40 @@ public class MainActivity extends Activity {
 
     private static final int REQ_BLUETOOTH = 41;
     private static final int REQ_PROJECTION = 42;
+    private static final long UNLOCK_HOLD_MS = 2000L;
+    private static final String STATE_LOCKED = "screen_locked";
 
     private TextView status;
     private Button musicButton;
     private Button saveButton;
+    private Button lockButton;
     private ListView list;
     private TrackAdapter adapter;
     private List<Track> tracks = new ArrayList<Track>();
+    private final List<View> lockableViews = new ArrayList<View>();
     private boolean projectionRequested;
     private long lastProjectionRequestAt;
+
+    /**
+     * Screen lock. All controls except the lock button are disabled so a sleeve, rain drop or
+     * handlebar bump cannot stop the music or skip a song. Music and the Bluetooth media
+     * buttons are not touched at all; they live in the background services.
+     */
+    private boolean locked;
+    private boolean holdingToUnlock;
+    private boolean unlockHoldCompleted;
+
+    private final Runnable unlockHoldRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!locked || !holdingToUnlock) {
+                return;
+            }
+            unlockHoldCompleted = true;
+            lockButton.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            setLocked(false);
+        }
+    };
 
     private final android.content.SharedPreferences.OnSharedPreferenceChangeListener libraryListener =
             new android.content.SharedPreferences.OnSharedPreferenceChangeListener() {
@@ -99,6 +127,64 @@ public class MainActivity extends Activity {
         status.setTextColor(Color.parseColor("#9AA0A6"));
         status.setPadding(dp(20), dp(4), dp(20), dp(10));
         root.addView(status);
+
+        lockButton = new Button(this);
+        lockButton.setAllCaps(false);
+        lockButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        lockButton.setTypeface(null, Typeface.BOLD);
+        lockButton.setLongClickable(false);
+        lockButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (locked) {
+                    showUnlockHint();
+                } else {
+                    setLocked(true);
+                }
+            }
+        });
+        lockButton.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        v.setPressed(true);
+                        if (locked) {
+                            holdingToUnlock = true;
+                            unlockHoldCompleted = false;
+                            lockButton.setText("\uD83D\uDD12  KEEP HOLDING\n2 s to unlock");
+                            lockButton.postDelayed(unlockHoldRunnable, UNLOCK_HOLD_MS);
+                        }
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        v.setPressed(false);
+                        if (holdingToUnlock) {
+                            lockButton.removeCallbacks(unlockHoldRunnable);
+                            boolean completed = unlockHoldCompleted;
+                            holdingToUnlock = false;
+                            unlockHoldCompleted = false;
+                            if (!completed) {
+                                refreshLockUi();
+                                if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                                    showUnlockHint();
+                                }
+                            }
+                            return true;
+                        }
+                        if (!locked && event.getActionMasked() == MotionEvent.ACTION_UP) {
+                            setLocked(true);
+                        }
+                        return true;
+                    default:
+                        return true;
+                }
+            }
+        });
+        LinearLayout.LayoutParams lockParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(64));
+        lockParams.setMargins(dp(12), 0, dp(12), dp(8));
+        root.addView(lockButton, lockParams);
 
         musicButton = new Button(this);
         musicButton.setAllCaps(false);
@@ -179,6 +265,12 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         root.addView(footer);
+        lockableViews.add(musicButton);
+        lockableViews.add(list);
+        lockableViews.add(addButton);
+        lockableViews.add(settingsButton);
+        lockableViews.add(logsButton);
+        lockableViews.add(saveButton);
         setContentView(root);
 
         adapter = new TrackAdapter();
@@ -207,7 +299,25 @@ public class MainActivity extends Activity {
         // and acting on that would silently switch music mode on again.
         if (savedInstanceState == null) {
             handleIntent(getIntent());
+        } else {
+            locked = savedInstanceState.getBoolean(STATE_LOCKED, false);
         }
+        refreshLockUi();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putBoolean(STATE_LOCKED, locked);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
+        super.onBackPressed();
     }
 
     @Override
@@ -232,8 +342,17 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        cancelUnlockHold();
         Library.prefs(this).unregisterOnSharedPreferenceChangeListener(libraryListener);
         super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (lockButton != null) {
+            lockButton.removeCallbacks(unlockHoldRunnable);
+        }
+        super.onDestroy();
     }
 
     private void handleIntent(Intent intent) {
@@ -320,6 +439,10 @@ public class MainActivity extends Activity {
      * it never turns capture off.
      */
     private void toggleSaving() {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
         if (RecorderService.isRunning()) {
             Toast.makeText(this, "Capture is always on while Brave Music is allowed",
                     Toast.LENGTH_SHORT).show();
@@ -357,7 +480,7 @@ public class MainActivity extends Activity {
      * a reboot happens, so ask for it again whenever the app is open, regardless of MUSIC ON.
      */
     private void maybeRequestSaving() {
-        if (RecorderService.isRunning() || projectionRequested) {
+        if (RecorderService.isRunning() || projectionRequested || locked) {
             return;
         }
         if (System.currentTimeMillis() - lastProjectionRequestAt < 10 * 60_000L) {
@@ -384,6 +507,10 @@ public class MainActivity extends Activity {
 
     /** User picked this song on purpose: play it even if it was played recently. */
     private void selectTrack(int position) {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
         if (position < 0 || position >= tracks.size()) {
             return;
         }
@@ -394,6 +521,10 @@ public class MainActivity extends Activity {
     }
 
     private void setMusicMode(boolean on) {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
         Library.prefs(this).edit().putBoolean(Library.KEY_MUSIC_ON, on).apply();
         Logs.i("BravePlayUI", "music mode " + (on ? "ON" : "OFF"));
         if (!on) {
@@ -442,6 +573,71 @@ public class MainActivity extends Activity {
                 });
             }
         }, "start-music").start();
+    }
+
+    private void showUnlockHint() {
+        Toast.makeText(this,
+                "Screen locked - hold the lock button for 2 seconds to unlock",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void setLocked(boolean value) {
+        if (locked == value) {
+            return;
+        }
+        locked = value;
+        refreshLockUi();
+        if (value) {
+            lockButton.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+        }
+        Logs.i("BravePlayUI", value ? "screen locked" : "screen unlocked");
+        Toast.makeText(this, value
+                        ? "Locked - music keeps playing; Bluetooth buttons still work"
+                        : "Unlocked",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    /**
+     * Disables every interactive view except the lock button, and keeps the screen awake
+     * while locked. The radio, local player and Bluetooth media session are not affected.
+     */
+    private void refreshLockUi() {
+        if (lockButton == null) {
+            return;
+        }
+        lockButton.setText(locked
+                ? "\uD83D\uDD12  LOCKED\nhold 2 s to unlock"
+                : "\uD83D\uDD13  LOCK\n(tap to lock)");
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor(locked ? "#B45309" : "#24242C"));
+        bg.setCornerRadius(dp(14));
+        bg.setStroke(dp(2), Color.parseColor(locked ? "#F59E0B" : "#3A3A46"));
+        lockButton.setBackground(bg);
+        lockButton.setTextColor(locked ? Color.WHITE : Color.parseColor("#E8EAED"));
+        lockButton.setEnabled(true);
+
+        for (View view : lockableViews) {
+            view.setEnabled(!locked);
+            view.setAlpha(locked ? 0.35f : 1f);
+        }
+
+        if (locked) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+    }
+
+    /** A hold that was not completed (for example the user pressed Home) must not stick. */
+    private void cancelUnlockHold() {
+        if (lockButton != null) {
+            lockButton.removeCallbacks(unlockHoldRunnable);
+        }
+        if (holdingToUnlock) {
+            holdingToUnlock = false;
+            unlockHoldCompleted = false;
+            refreshLockUi();
+        }
     }
 
     private void refreshList() {
@@ -512,6 +708,10 @@ public class MainActivity extends Activity {
     }
 
     private void showAddDialog() {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
         final EditText input = new EditText(this);
         input.setHint("https://www.youtube.com/watch?v=...");
         input.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
@@ -589,6 +789,10 @@ public class MainActivity extends Activity {
     }
 
     private void showLogs() {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
         final String text = Logs.tail(this, 400);
         TextView view = new TextView(this);
         view.setText(text);
@@ -627,6 +831,10 @@ public class MainActivity extends Activity {
     }
 
     private void confirmRemove(final int position) {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
         new AlertDialog.Builder(this)
                 .setTitle("Remove this link?")
                 .setMessage(tracks.get(position).displayTitle())
