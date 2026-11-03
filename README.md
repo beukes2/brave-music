@@ -14,7 +14,9 @@ private storage, one `.m4a` file per video (`files/music/<video-id>.m4a`). Radio
 keep their video id; a video that is not in the list gets a stable `auto-<hash>` id and a
 `local:` URL, and is added to the list automatically when the recording is saved. Saved
 rows say **saved**; the next time the song is chosen, the saved copy is played instead of
-opening Brave.
+opening Brave. The list is de-duplicated by video id and by the same normalised title/channel,
+so an automatically saved copy of a built-in song is merged into the built-in row (its audio
+is moved to the built-in id) instead of appearing twice.
 
 - Android requires a **screen/audio capture consent** for this. The app asks for it
   automatically whenever it comes to the foreground, regardless of MUSIC ON/OFF (and
@@ -77,7 +79,7 @@ background.
 
 The **LOCK** button below the status line is a touch guard for the phone mount. Tap it
 once and all other controls on the app are disabled (MUSIC ON/OFF, every row in the song
-list, Add link, Settings, Logs and Save). The button turns amber and reads **LOCKED**.
+list including its Remove/Re-save buttons, Add link, Settings, Logs and Save). The button turns amber and reads **LOCKED**.
 Touching anywhere else on the screen does nothing: it cannot stop the music, skip a song,
 scroll the list or open a dialog. The system Back gesture is ignored as well.
 
@@ -108,8 +110,14 @@ streams (no length) are never cut off by the rotation.
   hold it for 2 seconds to unlock. See [Screen lock for cycling](#screen-lock-for-cycling).
 - If Android asks for the *Nearby devices* permission on first launch, allow it – that is
   the Bluetooth access used to keep Bluetooth on. `install.ps1` grants it over adb too.
-- **Add link** (bottom-left) stores extra links without rebuilding; long-press an added
-  row to delete it. Several links can be pasted at once (separated by spaces/newlines).
+- **Add link** (bottom-left) stores extra links without rebuilding. Several links can be
+  pasted at once (separated by spaces/newlines).
+- Every song row has two small buttons at the bottom: **Remove · hold 2 s** and
+  **Re-save · hold 2 s**. A short tap does nothing. Remove hides a built-in row from this
+  device (add the same link again to restore it) or deletes a custom row; saved audio is kept
+  for web tracks. Re-save deletes the saved audio, resets the recorder and replays that video
+  in Brave so a fresh copy is captured. Re-save is refused while capture is paused or for a
+  local-only track with no web link.
 - **Save** (bottom-right, next to Logs) is an always-on status/consent control. It shows
   `Save: on` while capture is running and `Save: paused` when Android needs the consent
   tap again; tapping a paused button asks for it. Tapping `Save: on` only shows a
@@ -172,11 +180,13 @@ audio while the capture consent is active, never the microphone itself.
 
 ## How it works
 
-- `MainActivity` – big toggle, song list with real titles and **saved** markers, “Add
-  link”, “Save”, logs, and the cycling **LOCK** guard (tap to lock, 2 s hold to unlock;
+- `MainActivity` - big toggle, song list with real titles and **saved** markers, per-row
+  hold-to-confirm **Remove** and **Re-save** actions, "Add
+  link", "Save", logs, and the cycling **LOCK** guard (tap to lock, 2 s hold to unlock;
   disables every other control and keeps the screen awake while locked).
-- `Library` – built-in list, links added by you, songs found automatically, and the
-  one-hour play history (shared preferences `brave_play`).
+- `Library` - built-in list, links added by you, songs found automatically, duplicate
+  merging, removed-built-in hiding, and the one-hour play history (shared preferences
+  `brave_play`).
 - `Radio` – picks the next song: next entry that was not played in the last hour, else a
   newly discovered song, else the least recently played one. Plays the saved `.m4a` if
   there is one, otherwise opens the song in Brave. A `local:` row with no file is skipped

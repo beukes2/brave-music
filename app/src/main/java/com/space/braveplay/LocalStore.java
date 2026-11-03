@@ -97,6 +97,27 @@ public final class LocalStore {
         part(context, id).delete();
     }
 
+    /**
+     * Moves a saved file when two duplicate rows are merged. The destination wins when it
+     * already has audio; otherwise the source is renamed so the kept row stays playable.
+     */
+    public static boolean move(Context context, String fromId, String toId) {
+        if (fromId == null || toId == null || fromId.equals(toId)
+                || fromId.isEmpty() || toId.isEmpty()) {
+            return false;
+        }
+        File source = file(context, fromId);
+        File target = file(context, toId);
+        if (!source.isFile() || target.isFile()) {
+            return false;
+        }
+        boolean moved = source.renameTo(target);
+        if (moved) {
+            Logs.i("BravePlayLocal", "moved saved audio " + fromId + " -> " + toId);
+        }
+        return moved;
+    }
+
     public static int count(Context context) {
         File[] files = dir(context).listFiles();
         if (files == null) {

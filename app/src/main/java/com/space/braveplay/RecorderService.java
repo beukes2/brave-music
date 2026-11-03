@@ -145,6 +145,58 @@ public final class RecorderService extends Service {
         }
     }
 
+    /**
+     * Clears the "already recorded" guard for one video. The next play in Brave can then
+     * create a fresh file, which is what the Re-save row action needs.
+     */
+    public static void forget(Context context, final String id) {
+        if (context == null || id == null || id.isEmpty()) {
+            return;
+        }
+        final RecorderService service = instance;
+        if (service == null) {
+            Logs.w(TAG, "forget " + id + ": capture is not running");
+            return;
+        }
+        service.handler.post(new Runnable() {
+            @Override
+            public void run() {
+                service.forgetTrack(id);
+            }
+        });
+    }
+
+    private void forgetTrack(String id) {
+        boolean changed = false;
+        if (id.equals(fileId)) {
+            Logs.i(TAG, "force re-save: closing current file " + id);
+            finishCurrent(false);
+            changed = true;
+        }
+        if (id.equals(finishedId)) {
+            finishedId = "";
+            changed = true;
+        }
+        if (id.equals(observedKey)) {
+            observedKey = "";
+            observedPosition = 0L;
+            lastPositionMs = 0L;
+            lastPositionChangeAt = SystemClock.uptimeMillis();
+            observedPlaying = false;
+            changed = true;
+        }
+        if (id.equals(pendingId)) {
+            clearPending();
+            changed = true;
+        }
+        lastMetaLogKey = "";
+        lastNotificationText = "";
+        updateNotification();
+        if (changed) {
+            Logs.i(TAG, "reset capture state for " + id + " (force re-save)");
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();

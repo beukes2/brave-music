@@ -3,11 +3,15 @@ package com.space.braveplay;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import java.text.Normalizer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Playlist + play history.
@@ -37,6 +41,8 @@ public final class Library {
     public static final long REPEAT_WINDOW_MS = 60 * 60 * 1000L;
 
     public static final String KEY_CUSTOM = "custom_tracks";
+    /** Built-in ids hidden with the Remove action; they can be added again later. */
+    public static final String KEY_HIDDEN_BUILTINS = "hidden_builtins";
     private static final String KEY_HISTORY = "history";
 
     /** id, title, author, duration (s). 0 = live stream. */
@@ -125,13 +131,157 @@ public final class Library {
         return Urls.count();
     }
 
+    /**
+     * The visible playlist. Built-ins come first, then saved/custom entries. Duplicates are
+     * merged by video id or by the same normalised title/channel, so a song can only appear
+     * once even when it was saved under an automatic local id as well.
+     */
     public static List<Track> all(Context context) {
         List<Track> out = new ArrayList<Track>();
+        Set<String> hidden = hiddenBuiltinIds(context);
+        List<Track> hiddenTracks = new ArrayList<Track>();
         for (String url : Urls.URLS) {
-            out.add(builtin(url));
+            Track track = builtin(url);
+            if (hidden.contains(track.id)) {
+                hiddenTracks.add(track);
+                continue;
+            }
+            merge(context, out, track);
         }
-        out.addAll(custom(context));
+
+        List<Track> rawCustom = custom(context);
+        List<Track> keptCustom = new ArrayList<Track>();
+        boolean customChanged = false;
+        for (Track track : rawCustom) {
+            if (hidden.contains(track.id)) {
+                customChanged = true;
+                continue;
+            }
+            Track hiddenDuplicate = findSame(hiddenTracks, track);
+            if (hiddenDuplicate != null) {
+                // The user removed the built-in. Keep its saved audio under the built-in id
+                // so re-adding the link later can still use it, but do not show a duplicate.
+                reconcileFiles(context, track, hiddenDuplicate);
+                customChanged = true;
+                continue;
+            }
+            if (findSame(out, track) != null) {
+                merge(context, out, track);
+                customChanged = true;
+                continue;
+            }
+            merge(context, out, track);
+            keptCustom.add(track);
+        }
+        if (customChanged) {
+            saveCustom(context, keptCustom);
+        }
         return out;
+    }
+
+    /** Adds a track unless the same video/song is already present. */
+    private static void merge(Context context, List<Track> out, Track incoming) {
+        for (int i = 0; i < out.size(); i++) {
+            Track existing = out.get(i);
+            if (!sameRecording(existing, incoming)) {
+                continue;
+            }
+            Track preferred = preferred(existing, incoming);
+            Track other = preferred == existing ? incoming : existing;
+            out.set(i, merged(preferred, other));
+            reconcileFiles(context, existing, incoming);
+            return;
+        }
+        out.add(incoming);
+    }
+
+    private static Track preferred(Track a, Track b) {
+        if (a.isLocalOnly() && !b.isLocalOnly()) {
+            return b;
+        }
+        return a;
+    }
+
+    private static Track merged(Track preferred, Track other) {
+        String title = preferred.title;
+        if (title.isEmpty() || title.equals(preferred.id)) {
+            title = other.title;
+        }
+        String author = preferred.author.isEmpty() ? other.author : preferred.author;
+        int duration = Math.max(preferred.durationSec, other.durationSec);
+        return new Track(preferred.id, preferred.url, title, author, duration);
+    }
+
+    private static Track findSame(List<Track> tracks, Track wanted) {
+        for (Track track : tracks) {
+            if (sameRecording(track, wanted)) {
+                return track;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Two entries describe the same recording when their ids match, or when their titles are
+     * identical after removing punctuation/spacing and their channels do not contradict.
+     */
+    private static boolean sameRecording(Track a, Track b) {
+        if (a.id.equals(b.id)) {
+            return true;
+        }
+        String at = normalizeTitle(a.title);
+        String bt = normalizeTitle(b.title);
+        if (at.length() < 3 || !at.equals(bt)) {
+            return false;
+        }
+        String aa = normalizeAuthor(a.author);
+        String ba = normalizeAuthor(b.author);
+        return aa.isEmpty() || ba.isEmpty() || aa.equals(ba);
+    }
+
+    /**
+     * A saved local-only row and a web row can be the same song. Move the audio to the id that
+     * is kept so playback still finds it and no duplicate file is left in the visible list.
+     */
+    private static void reconcileFiles(Context context, Track a, Track b) {
+        if (a.isLocalOnly() && !b.isLocalOnly()) {
+            LocalStore.move(context, a.id, b.id);
+        } else if (!a.isLocalOnly() && b.isLocalOnly()) {
+            LocalStore.move(context, b.id, a.id);
+        } else if (!a.isLocalOnly() && !b.isLocalOnly()
+                && !LocalStore.has(context, a.id) && LocalStore.has(context, b.id)) {
+            LocalStore.move(context, b.id, a.id);
+        }
+    }
+
+    public static Set<String> hiddenBuiltinIds(Context context) {
+        return new HashSet<String>(prefs(context).getStringSet(
+                KEY_HIDDEN_BUILTINS, Collections.<String>emptySet()));
+    }
+
+    public static boolean isBuiltinId(String id) {
+        if (id == null || id.isEmpty()) {
+            return false;
+        }
+        for (String url : Urls.URLS) {
+            if (id.equals(Urls.videoId(url))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void hideBuiltin(Context context, String id) {
+        Set<String> hidden = hiddenBuiltinIds(context);
+        hidden.add(id);
+        prefs(context).edit().putStringSet(KEY_HIDDEN_BUILTINS, hidden).apply();
+    }
+
+    private static void unhideBuiltin(Context context, String id) {
+        Set<String> hidden = hiddenBuiltinIds(context);
+        if (hidden.remove(id)) {
+            prefs(context).edit().putStringSet(KEY_HIDDEN_BUILTINS, hidden).apply();
+        }
     }
 
     public static Track builtin(String url) {
@@ -145,12 +295,32 @@ public final class Library {
 
     public static List<Track> custom(Context context) {
         List<Track> out = new ArrayList<Track>();
+        Set<String> ids = new HashSet<String>();
+        boolean changed = false;
         for (String line : prefs(context).getString(KEY_CUSTOM, "").split("\n")) {
             Track track = parseLine(line);
-            if (track != null) {
-                out.add(track);
+            if (track == null) {
+                continue;
             }
+            if (!ids.add(track.id)) {
+                changed = true;
+                continue;
+            }
+            out.add(track);
         }
+        if (changed) {
+            saveCustom(context, out);
+        }
+        return out;
+    }
+
+    /** All entries, including removed built-ins; used for matching and playback state. */
+    private static List<Track> matching(Context context) {
+        List<Track> out = new ArrayList<Track>();
+        for (String url : Urls.URLS) {
+            out.add(builtin(url));
+        }
+        out.addAll(custom(context));
         return out;
     }
 
@@ -158,7 +328,7 @@ public final class Library {
         if (id == null || id.isEmpty()) {
             return null;
         }
-        for (Track track : all(context)) {
+        for (Track track : matching(context)) {
             if (track.id.equals(id)) {
                 return track;
             }
@@ -170,8 +340,9 @@ public final class Library {
         if (url == null) {
             return null;
         }
-        for (Track track : all(context)) {
-            if (track.url.equals(url)) {
+        String wantedId = Urls.videoId(url);
+        for (Track track : matching(context)) {
+            if (track.url.equals(url) || track.id.equals(wantedId)) {
                 return track;
             }
         }
@@ -187,7 +358,7 @@ public final class Library {
             return null;
         }
         List<Track> matches = new ArrayList<Track>();
-        for (Track track : all(context)) {
+        for (Track track : matching(context)) {
             if (titlesMatch(track.title, title)) {
                 matches.add(track);
             }
@@ -254,16 +425,52 @@ public final class Library {
         return new Track(id, url, p.getString(KEY_TITLE, ""), "", p.getInt(KEY_DURATION, 0));
     }
 
-    public static void add(Context context, Track track) {
+    public static Track addOrFind(Context context, Track track) {
         if (track == null || track.id.isEmpty()) {
-            return;
+            return track;
         }
-        if (findById(context, track.id) != null) {
-            return;
+        Track existing = findById(context, track.id);
+        if (existing == null) {
+            for (Track candidate : matching(context)) {
+                if (sameRecording(candidate, track)) {
+                    existing = candidate;
+                    break;
+                }
+            }
+        }
+        if (existing != null) {
+            if (isBuiltinId(existing.id)) {
+                // Adding a link that was previously removed makes it visible again.
+                unhideBuiltin(context, existing.id);
+                return existing;
+            }
+            if (existing.isLocalOnly() && !track.isLocalOnly()) {
+                Track mergedTrack = merged(track, existing);
+                List<Track> custom = custom(context);
+                boolean replaced = false;
+                for (int i = 0; i < custom.size(); i++) {
+                    if (sameRecording(custom.get(i), existing)) {
+                        custom.set(i, mergedTrack);
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (replaced) {
+                    saveCustom(context, custom);
+                    reconcileFiles(context, existing, track);
+                    return mergedTrack;
+                }
+            }
+            return existing;
         }
         List<Track> custom = custom(context);
         custom.add(track);
         saveCustom(context, custom);
+        return track;
+    }
+
+    public static void add(Context context, Track track) {
+        addOrFind(context, track);
     }
 
     public static void updateMeta(Context context, Track track) {
@@ -308,17 +515,49 @@ public final class Library {
         }
     }
 
-    public static void removeAt(Context context, int position) {
-        List<Track> custom = custom(context);
-        int index = position - builtinCount();
-        if (index < 0 || index >= custom.size()) {
+    /**
+     * Removes a row. Built-ins are hidden instead of edited, so they can be restored by adding
+     * the same link again. Saved audio is kept for web tracks; a local-only row has to take its
+     * audio with it because there is no other playable source.
+     */
+    public static void remove(Context context, Track track) {
+        if (track == null) {
             return;
         }
-        Track removed = custom.remove(index);
-        if (removed.isLocalOnly()) {
-            LocalStore.delete(context, removed.id);
+        if (isBuiltinId(track.id)) {
+            hideBuiltin(context, track.id);
         }
-        saveCustom(context, custom);
+        removeCustomMatching(context, track);
+        if (track.isLocalOnly()) {
+            LocalStore.delete(context, track.id);
+        }
+    }
+
+    private static void removeCustomMatching(Context context, Track wanted) {
+        List<Track> custom = custom(context);
+        List<Track> kept = new ArrayList<Track>();
+        boolean removed = false;
+        for (Track track : custom) {
+            if (sameRecording(track, wanted)) {
+                removed = true;
+                if (track.isLocalOnly()) {
+                    LocalStore.delete(context, track.id);
+                }
+            } else {
+                kept.add(track);
+            }
+        }
+        if (removed) {
+            saveCustom(context, kept);
+        }
+    }
+
+    public static void removeAt(Context context, int position) {
+        List<Track> tracks = all(context);
+        if (position < 0 || position >= tracks.size()) {
+            return;
+        }
+        remove(context, tracks.get(position));
     }
 
     // -------------------------------------------------------------- history
@@ -452,16 +691,31 @@ public final class Library {
         return value == null ? "" : value.replace('\t', ' ').replace('\n', ' ');
     }
 
+    /** Lowercase, unaccented, punctuation/space-free key used only for matching. */
     private static String normalizeTitle(String value) {
         if (value == null) {
             return "";
         }
-        return value.toLowerCase(Locale.ROOT)
-                .replace("&amp;", "&")
-                .replace("&#39;", "'")
-                .replace("&quot;", "\"")
-                .replaceAll("\\s+", " ")
-                .trim();
+        String text = value.toLowerCase(Locale.ROOT)
+                .replace("&amp;", "and")
+                .replace("&#39;", "")
+                .replace("&quot;", "")
+                .replace("&lt;", "")
+                .replace("&gt;", "");
+        text = Normalizer.normalize(text, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "");
+        return text.replaceAll("[^\\p{L}\\p{N}]+", "");
+    }
+
+    private static String normalizeAuthor(String value) {
+        String text = normalizeTitle(value);
+        if (text.endsWith("topic")) {
+            text = text.substring(0, text.length() - 5);
+        }
+        if (text.endsWith("vevo")) {
+            text = text.substring(0, text.length() - 4);
+        }
+        return text;
     }
 
     private static boolean titlesMatch(String a, String b) {

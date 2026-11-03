@@ -59,6 +59,7 @@ public class MainActivity extends Activity {
     private static final int REQ_BLUETOOTH = 41;
     private static final int REQ_PROJECTION = 42;
     private static final long UNLOCK_HOLD_MS = 2000L;
+    private static final long ROW_ACTION_HOLD_MS = 2000L;
     private static final String STATE_LOCKED = "screen_locked";
 
     private TextView status;
@@ -99,7 +100,8 @@ public class MainActivity extends Activity {
                 public void onSharedPreferenceChanged(android.content.SharedPreferences sp,
                                                       String key) {
                     if (Library.KEY_URL.equals(key) || Library.KEY_MUSIC_ON.equals(key)
-                            || Library.KEY_CUSTOM.equals(key)) {
+                            || Library.KEY_CUSTOM.equals(key)
+                            || Library.KEY_HIDDEN_BUILTINS.equals(key)) {
                         refreshList();
                         refreshUi();
                     }
@@ -286,10 +288,10 @@ public class MainActivity extends Activity {
         list.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
             @Override
             public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
-                if (position < Library.builtinCount()) {
+                if (position < 0 || position >= tracks.size()) {
                     return false;
                 }
-                confirmRemove(position);
+                confirmRemove(tracks.get(position));
                 return true;
             }
         });
@@ -343,6 +345,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         cancelUnlockHold();
+        if (adapter != null) {
+            adapter.cancelHolds();
+        }
         Library.prefs(this).unregisterOnSharedPreferenceChangeListener(libraryListener);
         super.onPause();
     }
@@ -375,8 +380,8 @@ public class MainActivity extends Activity {
             String normalized = normalize(url);
             Track track = Library.findByUrl(this, normalized);
             if (track == null) {
-                track = new Track(Urls.videoId(normalized), normalized, "", "", 0);
-                Library.add(this, track);
+                track = Library.addOrFind(this, new Track(
+                        Urls.videoId(normalized), normalized, "", "", 0));
             }
             Radio.play(this, track);
             List<Track> added = new ArrayList<Track>();
@@ -620,6 +625,9 @@ public class MainActivity extends Activity {
             view.setEnabled(!locked);
             view.setAlpha(locked ? 0.35f : 1f);
         }
+        if (adapter != null) {
+            adapter.notifyDataSetChanged();
+        }
 
         if (locked) {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -733,11 +741,8 @@ public class MainActivity extends Activity {
                             if (url == null) {
                                 continue;
                             }
-                            Track track = Library.findByUrl(MainActivity.this, url);
-                            if (track == null) {
-                                track = new Track(Urls.videoId(url), url, "", "", 0);
-                                Library.add(MainActivity.this, track);
-                            }
+                            Track track = Library.addOrFind(MainActivity.this, new Track(
+                                    Urls.videoId(url), url, "", "", 0));
                             added.add(track);
                         }
                         if (added.isEmpty()) {
@@ -830,23 +835,96 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private void confirmRemove(final int position) {
+    private void confirmRemove(final Track track) {
         if (locked) {
             showUnlockHint();
             return;
         }
         new AlertDialog.Builder(this)
-                .setTitle("Remove this link?")
-                .setMessage(tracks.get(position).displayTitle())
+                .setTitle("Remove this track?")
+                .setMessage(track.displayTitle())
                 .setPositiveButton("Remove", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
-                        Library.removeAt(MainActivity.this, position);
-                        refreshList();
+                        removeTrack(track);
                     }
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    /** Row action: remove the row without touching saved audio (unless it is local-only). */
+    private void removeTrack(Track track) {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
+        if (track == null) {
+            return;
+        }
+        boolean builtin = Library.isBuiltinId(track.id);
+        boolean localOnly = track.isLocalOnly();
+        Library.remove(this, track);
+        refreshList();
+        refreshUi();
+        Logs.i("BravePlayUI", "removed track \"" + track.displayTitle() + "\" (" + track.id + ")");
+        String message;
+        if (localOnly) {
+            message = "Track and saved audio removed";
+        } else if (builtin) {
+            message = "Removed from playlist - add the link again to restore";
+        } else {
+            message = "Track removed; saved audio kept";
+        }
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    /**
+     * Row action: delete the saved audio and play the web version again so the always-on
+     * recorder can create a fresh copy. Refuses before deleting when capture is not running.
+     */
+    private void forceResave(Track track) {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
+        if (track == null) {
+            return;
+        }
+        if (track.isLocalOnly()) {
+            Toast.makeText(this, "No web link for this saved-only track",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!RecorderService.isRunning()) {
+            Toast.makeText(this, "Capture is paused - tap Save first, then hold Re-save",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        String id = track.id;
+        Track current = Library.current(this);
+        if (current != null && current.id.equals(id)) {
+            LocalPlayer.stop();
+        }
+        LocalStore.delete(this, id);
+        RecorderService.forget(this, id);
+        refreshList();
+        refreshUi();
+        Logs.i("BravePlayUI", "force re-save \"" + track.displayTitle() + "\" (" + id + ")");
+        Toast.makeText(this, "Saved audio deleted - replaying to capture a fresh copy",
+                Toast.LENGTH_SHORT).show();
+
+        final Track fresh = new Track(id, "https://www.youtube.com/watch?v=" + id
+                + "&t=0s&brave_music_resave=" + System.currentTimeMillis(),
+                track.title, track.author, track.durationSec);
+        status.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                Radio.play(MainActivity.this, fresh);
+                refreshUi();
+            }
+        }, 450L);
     }
 
     private static String normalize(String raw) {
@@ -888,7 +966,7 @@ public class MainActivity extends Activity {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
-    /** Two-line rows: song title on top, channel + length below. */
+    /** Two-line rows plus two hold-to-confirm actions. */
     private final class TrackAdapter extends BaseAdapter {
 
         @Override
@@ -906,58 +984,38 @@ public class MainActivity extends Activity {
             return position;
         }
 
+        void cancelHolds() {
+            if (list == null) {
+                return;
+            }
+            for (int i = 0; i < list.getChildCount(); i++) {
+                Object tag = list.getChildAt(i).getTag();
+                if (tag instanceof RowHolder) {
+                    RowHolder holder = (RowHolder) tag;
+                    holder.removeHold.cancel();
+                    holder.resaveHold.cancel();
+                }
+            }
+        }
+
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
-            LinearLayout row;
-            TextView number;
-            TextView title;
-            TextView subtitle;
-            if (convertView instanceof LinearLayout) {
-                row = (LinearLayout) convertView;
-                number = (TextView) row.getChildAt(0);
-                LinearLayout column = (LinearLayout) row.getChildAt(1);
-                title = (TextView) column.getChildAt(0);
-                subtitle = (TextView) column.getChildAt(1);
+            RowHolder holder;
+            if (convertView instanceof LinearLayout
+                    && convertView.getTag() instanceof RowHolder) {
+                holder = (RowHolder) convertView.getTag();
             } else {
-                row = new LinearLayout(MainActivity.this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setPadding(dp(14), dp(12), dp(14), dp(12));
-                row.setGravity(android.view.Gravity.CENTER_VERTICAL);
-
-                number = new TextView(MainActivity.this);
-                number.setTextColor(Color.parseColor("#6B7280"));
-                number.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-                number.setGravity(android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL);
-                row.addView(number, new LinearLayout.LayoutParams(dp(34),
-                        ViewGroup.LayoutParams.MATCH_PARENT));
-
-                LinearLayout column = new LinearLayout(MainActivity.this);
-                column.setOrientation(LinearLayout.VERTICAL);
-                row.addView(column, new LinearLayout.LayoutParams(0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-                title = new TextView(MainActivity.this);
-                title.setTextColor(Color.WHITE);
-                title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-                title.setMaxLines(2);
-                title.setEllipsize(TextUtils.TruncateAt.END);
-                column.addView(title);
-
-                subtitle = new TextView(MainActivity.this);
-                subtitle.setTextColor(Color.parseColor("#8B93A1"));
-                subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-                subtitle.setMaxLines(1);
-                subtitle.setEllipsize(TextUtils.TruncateAt.END);
-                subtitle.setPadding(0, dp(3), 0, 0);
-                column.addView(subtitle);
+                holder = createRow();
+                convertView = holder.row;
+                convertView.setTag(holder);
             }
 
-            Track track = tracks.get(position);
-            number.setText(String.valueOf(position + 1));
-            title.setText(track.displayTitle());
+            final Track track = tracks.get(position);
+            holder.number.setText(String.valueOf(position + 1));
+            holder.title.setText(track.displayTitle());
             String saved = LocalStore.has(MainActivity.this, track.id)
                     ? "  \u00B7  saved" : "";
-            subtitle.setText(track.displayAuthor()
+            holder.subtitle.setText(track.displayAuthor()
                     + (track.durationSec > 0 ? "  \u00B7  " + duration(track.durationSec)
                     : "  \u00B7  live")
                     + saved);
@@ -966,22 +1024,223 @@ public class MainActivity extends Activity {
             bg.setColor(Color.parseColor(position % 2 == 0 ? "#1B1B22" : "#17171D"));
             bg.setCornerRadius(dp(10));
             bg.setStroke(dp(1), Color.parseColor("#2A2A34"));
-            row.setBackground(bg);
+            holder.row.setBackground(bg);
 
             boolean current = isCurrent(track);
-            title.setTextColor(current ? Color.parseColor("#4ADE80") : Color.WHITE);
-            return row;
+            holder.title.setTextColor(current ? Color.parseColor("#4ADE80") : Color.WHITE);
+            holder.removeHold.bind(track, new Runnable() {
+                @Override
+                public void run() {
+                    removeTrack(track);
+                }
+            });
+            holder.resaveHold.bind(track, new Runnable() {
+                @Override
+                public void run() {
+                    forceResave(track);
+                }
+            });
+            return holder.row;
+        }
+
+        private RowHolder createRow() {
+            LinearLayout row = new LinearLayout(MainActivity.this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setPadding(dp(14), dp(10), dp(14), dp(10));
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+            TextView number = new TextView(MainActivity.this);
+            number.setTextColor(Color.parseColor("#6B7280"));
+            number.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            number.setGravity(android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL);
+            row.addView(number, new LinearLayout.LayoutParams(dp(34),
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+
+            LinearLayout column = new LinearLayout(MainActivity.this);
+            column.setOrientation(LinearLayout.VERTICAL);
+            row.addView(column, new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView title = new TextView(MainActivity.this);
+            title.setTextColor(Color.WHITE);
+            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            title.setMaxLines(2);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            column.addView(title);
+
+            TextView subtitle = new TextView(MainActivity.this);
+            subtitle.setTextColor(Color.parseColor("#8B93A1"));
+            subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            subtitle.setMaxLines(1);
+            subtitle.setEllipsize(TextUtils.TruncateAt.END);
+            subtitle.setPadding(0, dp(3), 0, 0);
+            column.addView(subtitle);
+
+            LinearLayout actions = new LinearLayout(MainActivity.this);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            actions.setPadding(0, dp(7), 0, 0);
+            column.addView(actions, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            Button remove = smallButton("Remove \u00B7 hold 2 s", "#3B1D1D", "#7F1D1D",
+                    "#FCA5A5");
+            LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(
+                    0, dp(30), 1f);
+            removeParams.rightMargin = dp(6);
+            actions.addView(remove, removeParams);
+
+            Button resave = smallButton("Re-save \u00B7 hold 2 s", "#1E293B", "#334155",
+                    "#93C5FD");
+            actions.addView(resave, new LinearLayout.LayoutParams(0, dp(30), 1f));
+
+            HoldButtonTouch removeHold = new HoldButtonTouch(remove,
+                    "Remove \u00B7 hold 2 s", "Keep holding to remove...");
+            HoldButtonTouch resaveHold = new HoldButtonTouch(resave,
+                    "Re-save \u00B7 hold 2 s", "Keep holding to re-save...");
+            remove.setOnTouchListener(removeHold);
+            resave.setOnTouchListener(resaveHold);
+
+            return new RowHolder(row, number, title, subtitle, removeHold, resaveHold);
+        }
+
+        private Button smallButton(String text, String fill, String stroke, String textColor) {
+            Button button = new Button(MainActivity.this);
+            button.setText(text);
+            button.setAllCaps(false);
+            button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+            button.setTypeface(null, Typeface.BOLD);
+            button.setTextColor(Color.parseColor(textColor));
+            button.setMinWidth(0);
+            button.setMinimumWidth(0);
+            button.setMinHeight(0);
+            button.setMinimumHeight(0);
+            button.setPadding(dp(4), 0, dp(4), 0);
+            button.setFocusable(false);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(Color.parseColor(fill));
+            bg.setCornerRadius(dp(8));
+            bg.setStroke(dp(1), Color.parseColor(stroke));
+            button.setBackground(bg);
+            return button;
         }
 
         private boolean isCurrent(Track track) {
+            String id = Library.prefs(MainActivity.this).getString(Library.KEY_ID, "");
             String url = Library.prefs(MainActivity.this).getString(Library.KEY_URL, "");
-            return track.url.equals(url);
+            return track.id.equals(id) || track.url.equals(url)
+                    || (!url.isEmpty() && track.id.equals(Urls.videoId(url)));
         }
 
         private String duration(int seconds) {
             int minutes = seconds / 60;
             int rest = seconds % 60;
             return minutes + ":" + (rest < 10 ? "0" : "") + rest;
+        }
+    }
+
+    private final class RowHolder {
+        final LinearLayout row;
+        final TextView number;
+        final TextView title;
+        final TextView subtitle;
+        final HoldButtonTouch removeHold;
+        final HoldButtonTouch resaveHold;
+
+        RowHolder(LinearLayout row, TextView number, TextView title, TextView subtitle,
+                  HoldButtonTouch removeHold, HoldButtonTouch resaveHold) {
+            this.row = row;
+            this.number = number;
+            this.title = title;
+            this.subtitle = subtitle;
+            this.removeHold = removeHold;
+            this.resaveHold = resaveHold;
+        }
+    }
+
+    /**
+     * Small row action that only fires after a continuous two-second press. Releasing early
+     * cancels it, so a sleeve or a bump in a car cannot remove or overwrite a song.
+     */
+    private final class HoldButtonTouch implements View.OnTouchListener {
+        private final Button button;
+        private final String idleText;
+        private final String holdingText;
+        private Track track;
+        private Runnable action;
+        private boolean holding;
+        private boolean completed;
+
+        private final Runnable fire = new Runnable() {
+            @Override
+            public void run() {
+                if (!holding || completed || action == null) {
+                    return;
+                }
+                completed = true;
+                button.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                button.setText("Working...");
+                Runnable work = action;
+                action = null;
+                work.run();
+            }
+        };
+
+        HoldButtonTouch(Button button, String idleText, String holdingText) {
+            this.button = button;
+            this.idleText = idleText;
+            this.holdingText = holdingText;
+        }
+
+        void bind(Track track, Runnable action) {
+            button.removeCallbacks(fire);
+            this.track = track;
+            this.action = action;
+            holding = false;
+            completed = false;
+            button.setPressed(false);
+            button.setText(idleText);
+            button.setEnabled(!locked);
+            button.setAlpha(locked ? 0.4f : 1f);
+        }
+
+        void cancel() {
+            button.removeCallbacks(fire);
+            holding = false;
+            completed = false;
+            button.setPressed(false);
+            button.setText(idleText);
+        }
+
+        @Override
+        public boolean onTouch(View v, MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    if (locked) {
+                        showUnlockHint();
+                        return true;
+                    }
+                    if (track == null || action == null) {
+                        return true;
+                    }
+                    holding = true;
+                    completed = false;
+                    button.setPressed(true);
+                    button.setText(holdingText);
+                    button.postDelayed(fire, ROW_ACTION_HOLD_MS);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    button.setPressed(false);
+                    button.removeCallbacks(fire);
+                    if (!completed) {
+                        button.setText(idleText);
+                    }
+                    holding = false;
+                    completed = false;
+                    return true;
+                default:
+                    return true;
+            }
         }
     }
 }
