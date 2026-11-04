@@ -79,7 +79,7 @@ background.
 
 The **LOCK** button below the status line is a touch guard for the phone mount. Tap it
 once and all other controls on the app are disabled (MUSIC ON/OFF, every row in the song
-list including its Remove/Re-save buttons, Add link, Settings, Logs and Save). The button turns amber and reads **LOCKED**.
+list, the selected-song Remove/Re-save buttons, Add link, Settings, Logs and Save). The button turns amber and reads **LOCKED**.
 Touching anywhere else on the screen does nothing: it cannot stop the music, skip a song,
 scroll the list or open a dialog. The system Back gesture is ignored as well.
 
@@ -112,12 +112,13 @@ streams (no length) are never cut off by the rotation.
   the Bluetooth access used to keep Bluetooth on. `install.ps1` grants it over adb too.
 - **Add link** (bottom-left) stores extra links without rebuilding. Several links can be
   pasted at once (separated by spaces/newlines).
-- Every song row has two small buttons at the bottom: **Remove · hold 2 s** and
-  **Re-save · hold 2 s**. A short tap does nothing. Remove hides a built-in row from this
-  device (add the same link again to restore it) or deletes a custom row; saved audio is kept
-  for web tracks. Re-save deletes the saved audio, resets the recorder and replays that video
-  in Brave so a fresh copy is captured. Re-save is refused while capture is paused or for a
-  local-only track with no web link.
+- Below the song list is a **selected-song bar** with two buttons: **Remove · hold 2 s** and
+  **Re-save · hold 2 s**. They always act on the highlighted song (the one you tapped or the
+  one currently playing), not on every row. A short tap does nothing. Remove hides a built-in
+  row from this device (add the same link again to restore it) or deletes a custom row; saved
+  audio is kept for web tracks. Re-save deletes the saved audio, resets the recorder and
+  replays that video in Brave so a fresh copy is captured. Re-save is refused while capture is
+  paused or for a local-only track with no web link.
 - **Save** (bottom-right, next to Logs) is an always-on status/consent control. It shows
   `Save: on` while capture is running and `Save: paused` when Android needs the consent
   tap again; tapping a paused button asks for it. Tapping `Save: on` only shows a
@@ -180,8 +181,8 @@ audio while the capture consent is active, never the microphone itself.
 
 ## How it works
 
-- `MainActivity` - big toggle, song list with real titles and **saved** markers, per-row
-  hold-to-confirm **Remove** and **Re-save** actions, "Add
+- `MainActivity` - big toggle, song list with real titles and **saved** markers, a
+  selected-song bar with hold-to-confirm **Remove** and **Re-save** actions, "Add
   link", "Save", logs, and the cycling **LOCK** guard (tap to lock, 2 s hold to unlock;
   disables every other control and keeps the screen awake while locked).
 - `Library` - built-in list, links added by you, songs found automatically, duplicate

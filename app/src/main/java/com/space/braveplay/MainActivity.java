@@ -59,15 +59,20 @@ public class MainActivity extends Activity {
     private static final int REQ_BLUETOOTH = 41;
     private static final int REQ_PROJECTION = 42;
     private static final long UNLOCK_HOLD_MS = 2000L;
-    private static final long ROW_ACTION_HOLD_MS = 2000L;
+    private static final long ACTION_HOLD_MS = 2000L;
     private static final String STATE_LOCKED = "screen_locked";
 
     private TextView status;
     private Button musicButton;
     private Button saveButton;
     private Button lockButton;
+    private TextView selectedLabel;
+    private Button removeSelectedButton;
+    private Button resaveSelectedButton;
     private ListView list;
     private TrackAdapter adapter;
+    private HoldButtonTouch removeSelectedHold;
+    private HoldButtonTouch resaveSelectedHold;
     private List<Track> tracks = new ArrayList<Track>();
     private final List<View> lockableViews = new ArrayList<View>();
     private boolean projectionRequested;
@@ -209,6 +214,42 @@ public class MainActivity extends Activity {
         root.addView(list, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        LinearLayout selectedActions = new LinearLayout(this);
+        selectedActions.setOrientation(LinearLayout.VERTICAL);
+        selectedActions.setPadding(dp(12), 0, dp(12), dp(8));
+
+        selectedLabel = new TextView(this);
+        selectedLabel.setTextColor(Color.parseColor("#8B93A1"));
+        selectedLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        selectedLabel.setMaxLines(1);
+        selectedLabel.setEllipsize(TextUtils.TruncateAt.END);
+        selectedLabel.setPadding(dp(2), 0, dp(2), dp(5));
+        selectedActions.addView(selectedLabel);
+
+        LinearLayout selectedButtons = new LinearLayout(this);
+        selectedButtons.setOrientation(LinearLayout.HORIZONTAL);
+        selectedActions.addView(selectedButtons);
+
+        removeSelectedButton = actionButton("Remove \u00B7 hold 2 s", "#3B1D1D", "#7F1D1D",
+                "#FCA5A5");
+        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(
+                0, dp(38), 1f);
+        removeParams.rightMargin = dp(6);
+        selectedButtons.addView(removeSelectedButton, removeParams);
+
+        resaveSelectedButton = actionButton("Re-save \u00B7 hold 2 s", "#1E293B", "#334155",
+                "#93C5FD");
+        selectedButtons.addView(resaveSelectedButton, new LinearLayout.LayoutParams(
+                0, dp(38), 1f));
+
+        removeSelectedHold = new HoldButtonTouch(removeSelectedButton,
+                "Remove \u00B7 hold 2 s", "Keep holding to remove...");
+        resaveSelectedHold = new HoldButtonTouch(resaveSelectedButton,
+                "Re-save \u00B7 hold 2 s", "Keep holding to re-save...");
+        removeSelectedButton.setOnTouchListener(removeSelectedHold);
+        resaveSelectedButton.setOnTouchListener(resaveSelectedHold);
+        root.addView(selectedActions);
+
         LinearLayout footer = new LinearLayout(this);
         footer.setOrientation(LinearLayout.HORIZONTAL);
         footer.setPadding(dp(12), dp(4), dp(12), dp(16));
@@ -269,6 +310,8 @@ public class MainActivity extends Activity {
         root.addView(footer);
         lockableViews.add(musicButton);
         lockableViews.add(list);
+        lockableViews.add(removeSelectedButton);
+        lockableViews.add(resaveSelectedButton);
         lockableViews.add(addButton);
         lockableViews.add(settingsButton);
         lockableViews.add(logsButton);
@@ -345,8 +388,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         cancelUnlockHold();
-        if (adapter != null) {
-            adapter.cancelHolds();
+        if (removeSelectedHold != null) {
+            removeSelectedHold.cancel();
+        }
+        if (resaveSelectedHold != null) {
+            resaveSelectedHold.cancel();
         }
         Library.prefs(this).unregisterOnSharedPreferenceChangeListener(libraryListener);
         super.onPause();
@@ -628,6 +674,7 @@ public class MainActivity extends Activity {
         if (adapter != null) {
             adapter.notifyDataSetChanged();
         }
+        refreshSelectedActions();
 
         if (locked) {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -654,6 +701,7 @@ public class MainActivity extends Activity {
     }
 
     private void refreshUi() {
+        refreshSelectedActions();
         boolean music = isMusicOn();
         musicButton.setText(music
                 ? "\u25B6  MUSIC ON\ntap to stop"
@@ -700,6 +748,43 @@ public class MainActivity extends Activity {
     private String nowPlaying() {
         Track track = Library.current(this);
         return track == null ? null : track.displayTitle();
+    }
+
+    /** The bottom action pair always applies to the highlighted (current) song. */
+    private void refreshSelectedActions() {
+        if (selectedLabel == null || removeSelectedHold == null || resaveSelectedHold == null) {
+            return;
+        }
+        Track selected = null;
+        Track current = Library.current(this);
+        if (current != null) {
+            for (Track track : tracks) {
+                if (track.id.equals(current.id) || track.url.equals(current.url)) {
+                    selected = track;
+                    break;
+                }
+            }
+        }
+        if (selected == null) {
+            selectedLabel.setText("Selected song: none \u2013 tap a song to select it");
+            removeSelectedHold.bind(null, null);
+            resaveSelectedHold.bind(null, null);
+            return;
+        }
+        final Track actionTrack = selected;
+        selectedLabel.setText("Selected: " + actionTrack.displayTitle());
+        removeSelectedHold.bind(actionTrack, new Runnable() {
+            @Override
+            public void run() {
+                removeTrack(actionTrack);
+            }
+        });
+        resaveSelectedHold.bind(actionTrack, new Runnable() {
+            @Override
+            public void run() {
+                forceResave(actionTrack);
+            }
+        });
     }
 
     private boolean isMusicOn() {
@@ -966,7 +1051,27 @@ public class MainActivity extends Activity {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
-    /** Two-line rows plus two hold-to-confirm actions. */
+    private Button actionButton(String text, String fill, String stroke, String textColor) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setAllCaps(false);
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        button.setTypeface(null, Typeface.BOLD);
+        button.setTextColor(Color.parseColor(textColor));
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setPadding(dp(6), 0, dp(6), 0);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor(fill));
+        bg.setCornerRadius(dp(8));
+        bg.setStroke(dp(1), Color.parseColor(stroke));
+        button.setBackground(bg);
+        return button;
+    }
+
+    /** Two-line rows: song title on top, channel + length below. */
     private final class TrackAdapter extends BaseAdapter {
 
         @Override
@@ -984,20 +1089,6 @@ public class MainActivity extends Activity {
             return position;
         }
 
-        void cancelHolds() {
-            if (list == null) {
-                return;
-            }
-            for (int i = 0; i < list.getChildCount(); i++) {
-                Object tag = list.getChildAt(i).getTag();
-                if (tag instanceof RowHolder) {
-                    RowHolder holder = (RowHolder) tag;
-                    holder.removeHold.cancel();
-                    holder.resaveHold.cancel();
-                }
-            }
-        }
-
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
             RowHolder holder;
@@ -1010,7 +1101,7 @@ public class MainActivity extends Activity {
                 convertView.setTag(holder);
             }
 
-            final Track track = tracks.get(position);
+            Track track = tracks.get(position);
             holder.number.setText(String.valueOf(position + 1));
             holder.title.setText(track.displayTitle());
             String saved = LocalStore.has(MainActivity.this, track.id)
@@ -1028,25 +1119,13 @@ public class MainActivity extends Activity {
 
             boolean current = isCurrent(track);
             holder.title.setTextColor(current ? Color.parseColor("#4ADE80") : Color.WHITE);
-            holder.removeHold.bind(track, new Runnable() {
-                @Override
-                public void run() {
-                    removeTrack(track);
-                }
-            });
-            holder.resaveHold.bind(track, new Runnable() {
-                @Override
-                public void run() {
-                    forceResave(track);
-                }
-            });
             return holder.row;
         }
 
         private RowHolder createRow() {
             LinearLayout row = new LinearLayout(MainActivity.this);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setPadding(dp(14), dp(10), dp(14), dp(10));
+            row.setPadding(dp(14), dp(12), dp(14), dp(12));
             row.setGravity(android.view.Gravity.CENTER_VERTICAL);
 
             TextView number = new TextView(MainActivity.this);
@@ -1076,52 +1155,7 @@ public class MainActivity extends Activity {
             subtitle.setPadding(0, dp(3), 0, 0);
             column.addView(subtitle);
 
-            LinearLayout actions = new LinearLayout(MainActivity.this);
-            actions.setOrientation(LinearLayout.HORIZONTAL);
-            actions.setPadding(0, dp(7), 0, 0);
-            column.addView(actions, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-            Button remove = smallButton("Remove \u00B7 hold 2 s", "#3B1D1D", "#7F1D1D",
-                    "#FCA5A5");
-            LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(
-                    0, dp(30), 1f);
-            removeParams.rightMargin = dp(6);
-            actions.addView(remove, removeParams);
-
-            Button resave = smallButton("Re-save \u00B7 hold 2 s", "#1E293B", "#334155",
-                    "#93C5FD");
-            actions.addView(resave, new LinearLayout.LayoutParams(0, dp(30), 1f));
-
-            HoldButtonTouch removeHold = new HoldButtonTouch(remove,
-                    "Remove \u00B7 hold 2 s", "Keep holding to remove...");
-            HoldButtonTouch resaveHold = new HoldButtonTouch(resave,
-                    "Re-save \u00B7 hold 2 s", "Keep holding to re-save...");
-            remove.setOnTouchListener(removeHold);
-            resave.setOnTouchListener(resaveHold);
-
-            return new RowHolder(row, number, title, subtitle, removeHold, resaveHold);
-        }
-
-        private Button smallButton(String text, String fill, String stroke, String textColor) {
-            Button button = new Button(MainActivity.this);
-            button.setText(text);
-            button.setAllCaps(false);
-            button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
-            button.setTypeface(null, Typeface.BOLD);
-            button.setTextColor(Color.parseColor(textColor));
-            button.setMinWidth(0);
-            button.setMinimumWidth(0);
-            button.setMinHeight(0);
-            button.setMinimumHeight(0);
-            button.setPadding(dp(4), 0, dp(4), 0);
-            button.setFocusable(false);
-            GradientDrawable bg = new GradientDrawable();
-            bg.setColor(Color.parseColor(fill));
-            bg.setCornerRadius(dp(8));
-            bg.setStroke(dp(1), Color.parseColor(stroke));
-            button.setBackground(bg);
-            return button;
+            return new RowHolder(row, number, title, subtitle);
         }
 
         private boolean isCurrent(Track track) {
@@ -1143,23 +1177,18 @@ public class MainActivity extends Activity {
         final TextView number;
         final TextView title;
         final TextView subtitle;
-        final HoldButtonTouch removeHold;
-        final HoldButtonTouch resaveHold;
 
-        RowHolder(LinearLayout row, TextView number, TextView title, TextView subtitle,
-                  HoldButtonTouch removeHold, HoldButtonTouch resaveHold) {
+        RowHolder(LinearLayout row, TextView number, TextView title, TextView subtitle) {
             this.row = row;
             this.number = number;
             this.title = title;
             this.subtitle = subtitle;
-            this.removeHold = removeHold;
-            this.resaveHold = resaveHold;
         }
     }
 
     /**
-     * Small row action that only fires after a continuous two-second press. Releasing early
-     * cancels it, so a sleeve or a bump in a car cannot remove or overwrite a song.
+     * Selected-song action that only fires after a continuous two-second press. Releasing
+     * early cancels it, so a sleeve or a bump in a car cannot remove or overwrite a song.
      */
     private final class HoldButtonTouch implements View.OnTouchListener {
         private final Button button;
@@ -1199,8 +1228,9 @@ public class MainActivity extends Activity {
             completed = false;
             button.setPressed(false);
             button.setText(idleText);
-            button.setEnabled(!locked);
-            button.setAlpha(locked ? 0.4f : 1f);
+            boolean usable = !locked && track != null && action != null;
+            button.setEnabled(usable);
+            button.setAlpha(usable ? 1f : 0.4f);
         }
 
         void cancel() {
@@ -1226,7 +1256,7 @@ public class MainActivity extends Activity {
                     completed = false;
                     button.setPressed(true);
                     button.setText(holdingText);
-                    button.postDelayed(fire, ROW_ACTION_HOLD_MS);
+                    button.postDelayed(fire, ACTION_HOLD_MS);
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
