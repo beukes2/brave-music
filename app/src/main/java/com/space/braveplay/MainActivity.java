@@ -756,13 +756,13 @@ public class MainActivity extends Activity {
             return;
         }
         Track selected = null;
-        Track current = Library.current(this);
-        if (current != null) {
-            for (Track track : tracks) {
-                if (track.id.equals(current.id) || track.url.equals(current.url)) {
-                    selected = track;
-                    break;
-                }
+        String currentId = Library.prefs(this).getString(Library.KEY_ID, "");
+        String currentUrl = Library.prefs(this).getString(Library.KEY_URL, "");
+        for (Track track : tracks) {
+            if (track.id.equals(currentId) || track.url.equals(currentUrl)
+                    || (!currentUrl.isEmpty() && track.id.equals(Urls.videoId(currentUrl)))) {
+                selected = track;
+                break;
             }
         }
         if (selected == null) {

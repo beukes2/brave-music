@@ -109,6 +109,16 @@ public final class Library {
 
     private static Map<String, String[]> metaById;
 
+    /**
+     * The playlist changes only on a user action or when the recorder adds a saved video.
+     * Caching the built objects keeps the one-second media observer and the list UI from
+     * rebuilding and re-normalising every title on every call.
+     */
+    private static final Object CACHE_LOCK = new Object();
+    private static int cacheVersion;
+    private static List<Track> cachedAll;
+    private static List<Track> cachedMatching;
+
     private Library() {
     }
 
@@ -137,6 +147,25 @@ public final class Library {
      * once even when it was saved under an automatic local id as well.
      */
     public static List<Track> all(Context context) {
+        List<Track> cached;
+        int version;
+        synchronized (CACHE_LOCK) {
+            cached = cachedAll;
+            version = cacheVersion;
+        }
+        if (cached != null) {
+            return new ArrayList<Track>(cached);
+        }
+        List<Track> built = buildAll(context);
+        synchronized (CACHE_LOCK) {
+            if (version == cacheVersion) {
+                cachedAll = built;
+            }
+        }
+        return new ArrayList<Track>(built);
+    }
+
+    private static List<Track> buildAll(Context context) {
         List<Track> out = new ArrayList<Track>();
         Set<String> hidden = hiddenBuiltinIds(context);
         List<Track> hiddenTracks = new ArrayList<Track>();
@@ -229,14 +258,11 @@ public final class Library {
         if (a.id.equals(b.id)) {
             return true;
         }
-        String at = normalizeTitle(a.title);
-        String bt = normalizeTitle(b.title);
-        if (at.length() < 3 || !at.equals(bt)) {
+        if (a.titleKey.length() < 3 || !a.titleKey.equals(b.titleKey)) {
             return false;
         }
-        String aa = normalizeAuthor(a.author);
-        String ba = normalizeAuthor(b.author);
-        return aa.isEmpty() || ba.isEmpty() || aa.equals(ba);
+        return a.authorKey.isEmpty() || b.authorKey.isEmpty()
+                || a.authorKey.equals(b.authorKey);
     }
 
     /**
@@ -275,12 +301,14 @@ public final class Library {
         Set<String> hidden = hiddenBuiltinIds(context);
         hidden.add(id);
         prefs(context).edit().putStringSet(KEY_HIDDEN_BUILTINS, hidden).apply();
+        invalidateCache();
     }
 
     private static void unhideBuiltin(Context context, String id) {
         Set<String> hidden = hiddenBuiltinIds(context);
         if (hidden.remove(id)) {
             prefs(context).edit().putStringSet(KEY_HIDDEN_BUILTINS, hidden).apply();
+            invalidateCache();
         }
     }
 
@@ -316,12 +344,40 @@ public final class Library {
 
     /** All entries, including removed built-ins; used for matching and playback state. */
     private static List<Track> matching(Context context) {
+        List<Track> cached;
+        int version;
+        synchronized (CACHE_LOCK) {
+            cached = cachedMatching;
+            version = cacheVersion;
+        }
+        if (cached != null) {
+            return new ArrayList<Track>(cached);
+        }
+        List<Track> built = buildMatching(context);
+        synchronized (CACHE_LOCK) {
+            if (version == cacheVersion) {
+                cachedMatching = built;
+            }
+        }
+        return new ArrayList<Track>(built);
+    }
+
+    private static List<Track> buildMatching(Context context) {
         List<Track> out = new ArrayList<Track>();
         for (String url : Urls.URLS) {
             out.add(builtin(url));
         }
         out.addAll(custom(context));
         return out;
+    }
+
+    /** Must be called whenever the playlist or hidden-built-in set changes. */
+    private static void invalidateCache() {
+        synchronized (CACHE_LOCK) {
+            cacheVersion++;
+            cachedAll = null;
+            cachedMatching = null;
+        }
     }
 
     public static Track findById(Context context, String id) {
@@ -357,9 +413,10 @@ public final class Library {
         if (title == null || title.trim().isEmpty()) {
             return null;
         }
+        String wanted = normalizeTitle(title);
         List<Track> matches = new ArrayList<Track>();
         for (Track track : matching(context)) {
-            if (titlesMatch(track.title, title)) {
+            if (titlesMatch(track.titleKey, wanted)) {
                 matches.add(track);
             }
         }
@@ -372,9 +429,8 @@ public final class Library {
                 return track;
             }
         }
-        String wanted = normalizeTitle(title);
         for (Track track : matches) {
-            if (normalizeTitle(track.title).equals(wanted)) {
+            if (track.titleKey.equals(wanted)) {
                 return track;
             }
         }
@@ -638,6 +694,7 @@ public final class Library {
                     .append(track.durationSec);
         }
         prefs(context).edit().putString(KEY_CUSTOM, sb.toString()).apply();
+        invalidateCache();
     }
 
     private static Track parseLine(String line) {
@@ -692,7 +749,7 @@ public final class Library {
     }
 
     /** Lowercase, unaccented, punctuation/space-free key used only for matching. */
-    private static String normalizeTitle(String value) {
+    static String normalizeTitle(String value) {
         if (value == null) {
             return "";
         }
@@ -707,7 +764,7 @@ public final class Library {
         return text.replaceAll("[^\\p{L}\\p{N}]+", "");
     }
 
-    private static String normalizeAuthor(String value) {
+    static String normalizeAuthor(String value) {
         String text = normalizeTitle(value);
         if (text.endsWith("topic")) {
             text = text.substring(0, text.length() - 5);
@@ -718,13 +775,12 @@ public final class Library {
         return text;
     }
 
+    /** Compares pre-normalised title keys. */
     private static boolean titlesMatch(String a, String b) {
-        String x = normalizeTitle(a);
-        String y = normalizeTitle(b);
-        if (x.length() < 6 || y.length() < 6) {
+        if (a.length() < 6 || b.length() < 6) {
             return false;
         }
-        return x.equals(y) || x.contains(y) || y.contains(x);
+        return a.equals(b) || a.contains(b) || b.contains(a);
     }
 
     private static int parseInt(String value) {

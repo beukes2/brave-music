@@ -187,7 +187,8 @@ audio while the capture consent is active, never the microphone itself.
   disables every other control and keeps the screen awake while locked).
 - `Library` - built-in list, links added by you, songs found automatically, duplicate
   merging, removed-built-in hiding, and the one-hour play history (shared preferences
-  `brave_play`).
+  `brave_play`). The merged list and normalised title keys are cached and invalidated on
+  playlist changes, so the one-second recorder lookup does not rebuild the whole library.
 - `Radio` – picks the next song: next entry that was not played in the last hour, else a
   newly discovered song, else the least recently played one. Plays the saved `.m4a` if
   there is one, otherwise opens the song in Brave. A `local:` row with no file is skipped
