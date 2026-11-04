@@ -698,6 +698,7 @@ public class MainActivity extends Activity {
     private void refreshList() {
         tracks = Library.all(this);
         adapter.notifyDataSetChanged();
+        refreshSelectedActions();
     }
 
     private void refreshUi() {
