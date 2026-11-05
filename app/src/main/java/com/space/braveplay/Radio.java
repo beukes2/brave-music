@@ -1,5 +1,6 @@
 package com.space.braveplay;
 
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -9,6 +10,8 @@ import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 
 /**
@@ -61,7 +64,8 @@ public final class Radio {
                             .putInt(Library.KEY_DURATION, localSeconds).apply();
                 }
             }
-            pauseBrave(context);
+            stopBrave(context);
+            closeBraveProcess(context);
             Logs.i(TAG, "using saved local copy");
             return;
         }
@@ -76,14 +80,14 @@ public final class Radio {
     }
 
     /** Stops every Brave tab so none can play over a saved local copy. */
-    private static void pauseBrave(Context context) {
+    private static void stopBrave(Context context) {
         try {
             MediaSessionManager manager = (MediaSessionManager)
                     context.getSystemService(Context.MEDIA_SESSION_SERVICE);
             if (manager == null) {
                 return;
             }
-            boolean paused = false;
+            boolean stopped = false;
             for (MediaController controller : manager.getActiveSessions(
                     new ComponentName(context, MediaListenerService.class))) {
                 String pkg = controller.getPackageName();
@@ -93,15 +97,51 @@ public final class Radio {
                 PlaybackState state = controller.getPlaybackState();
                 if (state != null && (state.getState() == PlaybackState.STATE_PLAYING
                         || state.getState() == PlaybackState.STATE_BUFFERING)) {
-                    controller.getTransportControls().pause();
-                    paused = true;
+                    controller.getTransportControls().stop();
+                    stopped = true;
                 }
             }
-            if (paused) {
-                Logs.i(TAG, "paused Brave before local playback");
+            if (stopped) {
+                Logs.i(TAG, "stopped Brave before local playback");
             }
         } catch (Throwable t) {
-            Logs.w(TAG, "pause Brave: " + t);
+            Logs.w(TAG, "stop Brave: " + t);
+        }
+    }
+
+    /**
+     * Best effort: Android does not let one app force-stop another. Killing the background
+     * process is allowed, so Brave is out of the way whenever a saved copy is playing. If
+     * Brave is still in the foreground, only the pause above can take effect.
+     */
+    private static void closeBraveProcess(final Context context) {
+        killBraveBackground(context);
+        final Context app = context.getApplicationContext();
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                // The first request is often ignored while Brave is still finishing its
+                // media teardown. Try once more, but only if a local copy is still playing.
+                if (LocalPlayer.isActive()) {
+                    killBraveBackground(app);
+                }
+            }
+        }, 2_000L);
+    }
+
+    private static void killBraveBackground(Context context) {
+        try {
+            ActivityManager manager = (ActivityManager)
+                    context.getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager == null) {
+                return;
+            }
+            for (String pkg : BRAVE_PACKAGES) {
+                manager.killBackgroundProcesses(pkg);
+            }
+            Logs.i(TAG, "requested background close of Brave");
+        } catch (Throwable t) {
+            Logs.w(TAG, "close Brave: " + t);
         }
     }
 
