@@ -65,6 +65,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private Button musicButton;
     private Button saveButton;
+    private Button volumeButton;
     private Button lockButton;
     private TextView selectedLabel;
     private Button removeSelectedButton;
@@ -106,7 +107,8 @@ public class MainActivity extends Activity {
                                                       String key) {
                     if (Library.KEY_URL.equals(key) || Library.KEY_MUSIC_ON.equals(key)
                             || Library.KEY_CUSTOM.equals(key)
-                            || Library.KEY_HIDDEN_BUILTINS.equals(key)) {
+                            || Library.KEY_HIDDEN_BUILTINS.equals(key)
+                            || Library.KEY_FORCE_VOLUME.equals(key)) {
                         refreshList();
                         refreshUi();
                     }
@@ -292,6 +294,17 @@ public class MainActivity extends Activity {
         footer.addView(logsButton, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        volumeButton = new Button(this);
+        volumeButton.setAllCaps(false);
+        volumeButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleVolumeGuard();
+            }
+        });
+        footer.addView(volumeButton, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
         saveButton = new Button(this);
         saveButton.setText("Save");
         saveButton.setAllCaps(false);
@@ -312,6 +325,7 @@ public class MainActivity extends Activity {
         lockableViews.add(addButton);
         lockableViews.add(settingsButton);
         lockableViews.add(logsButton);
+        lockableViews.add(volumeButton);
         lockableViews.add(saveButton);
         setContentView(root);
 
@@ -487,6 +501,23 @@ public class MainActivity extends Activity {
      * for each app process, so tapping it (or opening the app) only asks for that permission;
      * it never turns capture off.
      */
+    private void toggleVolumeGuard() {
+        if (locked) {
+            showUnlockHint();
+            return;
+        }
+        boolean enabled = !Library.forceVolume(this);
+        Library.prefs(this).edit()
+                .putBoolean(Library.KEY_FORCE_VOLUME, enabled)
+                .apply();
+        Logs.i("BravePlayUI", "volume guard " + (enabled ? "ON" : "OFF"));
+        refreshUi();
+        Toast.makeText(this, enabled
+                        ? "Volume guard on - volume will be raised/unmuted when needed"
+                        : "Volume guard off - you control the volume",
+                Toast.LENGTH_SHORT).show();
+    }
+
     private void toggleSaving() {
         if (locked) {
             showUnlockHint();
@@ -716,6 +747,9 @@ public class MainActivity extends Activity {
         boolean saving = RecorderService.isRunning();
         if (saveButton != null) {
             saveButton.setText(saving ? "Save: on" : "Save: paused");
+        }
+        if (volumeButton != null) {
+            volumeButton.setText(Library.forceVolume(this) ? "Vol: on" : "Vol: off");
         }
         String capture = saving
                 ? "Capture on: every video you play in Brave is saved locally."

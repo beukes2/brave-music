@@ -163,6 +163,10 @@ public class PlayClickerService extends AccessibilityService {
                             // Capture stays on: it is independent of MUSIC ON.
                             LocalPlayer.stop();
                         }
+                    } else if (Library.KEY_FORCE_VOLUME.equals(key)) {
+                        if (Library.forceVolume(PlayClickerService.this) && isMusicOn()) {
+                            ensureAudibleVolume();
+                        }
                     } else if (Library.KEY_URL.equals(key)) {
                         nextActionAt = 0;
                         actionDelay = MIN_ACTION_DELAY_MS;
@@ -1442,6 +1446,9 @@ public class PlayClickerService extends AccessibilityService {
 
     /** Autoplay can start at volume 0 on some phones; make sure it is audible. */
     private void ensureAudibleVolume() {
+        if (!Library.forceVolume(this)) {
+            return;
+        }
         try {
             AudioManager audio = (AudioManager) getSystemService(AUDIO_SERVICE);
             if (audio == null) {

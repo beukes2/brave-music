@@ -58,7 +58,9 @@ background.
   - plays saved copies instead of Brave. Recording is **not** tied to MUSIC ON: the
     capture service saves anything you play in Brave in the background (see above),
   - keeps the **media volume above 0** (checked every 5 s and whenever the volume
-    changes, plus the media stream is unmuted) – turning the volume to zero is undone,
+    changes, plus the media stream is unmuted) - turning the volume to zero is undone.
+    This guard is **on by default**; the **Vol: on/off** button in the footer switches it
+    off if you want manual volume control,
   - keeps **Bluetooth on** (Android 13+ blocks apps from enabling it directly, so the app
     falls back to flipping the Bluetooth quick-settings tile),
   - **checks every 5 seconds** that music is still playing (logged as a heartbeat every
@@ -88,7 +90,7 @@ background.
 
 The **LOCK** button at the top (the app title and status block are hidden to save room) is a touch guard for the phone mount. Tap it
 once and all other controls on the app are disabled (MUSIC ON/OFF, every row in the song
-list, the selected-song Remove/Re-save buttons, Add link, Settings, Logs and Save). The button turns amber and reads **LOCKED**.
+list, the selected-song Remove/Re-save buttons, Add link, Settings, Logs, Vol and Save). The button turns amber and reads **LOCKED**.
 Touching anywhere else on the screen does nothing: it cannot stop the music, skip a song,
 scroll the list or open a dialog. The system Back gesture is ignored as well.
 
@@ -134,7 +136,9 @@ streams (no length) are never cut off by the rotation.
   reminder – it does not stop capture. The consent prompt appears by itself whenever the
   app comes to the foreground, even with MUSIC OFF. Videos you open in Brave yourself are
   saved too, not just the radio's songs.
-- **Logs** (next to Save) shows the last 400 lines of the app log and can copy them.
+- **Vol: on/off** (footer, next to Save) toggles the automatic volume guard. It is on by
+  default; turn it off to stop the app raising or unmuting the media stream.
+- **Logs** (next to Vol) shows the last 400 lines of the app log and can copy them.
   The same log lives in `files/app.log` (rolling, 1 MB):
 
   ```powershell

@@ -43,6 +43,8 @@ public final class Library {
     public static final String KEY_CUSTOM = "custom_tracks";
     /** Built-in ids hidden with the Remove action; they can be added again later. */
     public static final String KEY_HIDDEN_BUILTINS = "hidden_builtins";
+    /** Keep media volume audible while MUSIC ON; defaults on for existing installs. */
+    public static final String KEY_FORCE_VOLUME = "force_volume";
     private static final String KEY_HISTORY = "history";
 
     /** id, title, author, duration (s). 0 = live stream. */
@@ -124,6 +126,10 @@ public final class Library {
 
     public static SharedPreferences prefs(Context context) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    public static boolean forceVolume(Context context) {
+        return prefs(context).getBoolean(KEY_FORCE_VOLUME, true);
     }
 
     private static synchronized Map<String, String[]> meta() {
