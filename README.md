@@ -34,9 +34,11 @@ is moved to the built-in id) instead of appearing twice.
   unknown-length videos are still saved. The first video after granting consent is
   usually discarded if it was already half over.
 - Saved music/videos play through the phone's normal media output (speaker, Bluetooth,
-  car), with a wake lock, and need neither Brave nor the accessibility service. That is
-  why they keep playing when the screen is off and the phone is locked. A saved
-  `local:` row never opens Brave, even if its file is missing – it is skipped instead.
+  car), with a wake lock, and need neither Brave nor the accessibility service. The local
+  player requests media audio focus, so Brave/Android Auto pause their own audio when a
+  saved copy starts; if focus is lost temporarily it resumes when focus returns. That is
+  why saved copies keep playing when the screen is off and the phone is locked. A saved
+  `local:` row never opens Brave, even if its file is missing - it is skipped instead.
 - Files are capped at **2 GB total**; the oldest are deleted first, and a deleted
   `local:` video is removed from the list too. Nothing is uploaded.
 - Saved songs still obey the one-hour no-repeat rule and still show on the car display.
@@ -84,7 +86,7 @@ background.
 
 ## Screen lock for cycling
 
-The **LOCK** button below the status line is a touch guard for the phone mount. Tap it
+The **LOCK** button at the top (the app title and status block are hidden to save room) is a touch guard for the phone mount. Tap it
 once and all other controls on the app are disabled (MUSIC ON/OFF, every row in the song
 list, the selected-song Remove/Re-save buttons, Add link, Settings, Logs and Save). The button turns amber and reads **LOCKED**.
 Touching anywhere else on the screen does nothing: it cannot stop the music, skip a song,
@@ -113,7 +115,7 @@ streams (no length) are never cut off by the rotation.
 
 - On the phone: open **Brave Music**, tap the big **MUSIC ON** button. Tap a row to play
   that song immediately; the list turns the current song green.
-- Tap **LOCK** under the status line to ignore accidental screen touches while cycling;
+- Tap **LOCK** at the top to ignore accidental screen touches while cycling;
   hold it for 2 seconds to unlock. See [Screen lock for cycling](#screen-lock-for-cycling).
 - If Android asks for the *Nearby devices* permission on first launch, allow it – that is
   the Bluetooth access used to keep Bluetooth on. `install.ps1` grants it over adb too.

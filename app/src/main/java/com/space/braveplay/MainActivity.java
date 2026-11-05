@@ -118,21 +118,18 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         Logs.init(this);
 
+        android.app.ActionBar actionBar = getActionBar();
+        if (actionBar != null) {
+            actionBar.hide();
+        }
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.parseColor("#101014"));
 
-        TextView header = new TextView(this);
-        header.setText("Brave Music");
-        header.setTextColor(Color.WHITE);
-        header.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-        header.setPadding(dp(20), dp(18), dp(20), dp(0));
-        root.addView(header);
-
+        // Kept attached but invisible: delayed UI work still posts through it.
         status = new TextView(this);
-        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        status.setTextColor(Color.parseColor("#9AA0A6"));
-        status.setPadding(dp(20), dp(4), dp(20), dp(10));
+        status.setVisibility(View.GONE);
         root.addView(status);
 
         lockButton = new Button(this);
@@ -190,7 +187,7 @@ public class MainActivity extends Activity {
         });
         LinearLayout.LayoutParams lockParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(64));
-        lockParams.setMargins(dp(12), 0, dp(12), dp(8));
+        lockParams.setMargins(dp(12), dp(8), dp(12), dp(8));
         root.addView(lockButton, lockParams);
 
         musicButton = new Button(this);

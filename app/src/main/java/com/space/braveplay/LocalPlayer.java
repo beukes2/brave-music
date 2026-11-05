@@ -2,6 +2,7 @@ package com.space.braveplay;
 
 import android.content.Context;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.os.PowerManager;
 
@@ -22,6 +23,69 @@ public final class LocalPlayer {
     private static String activeId = "";
     private static boolean completed;
     private static Runnable onComplete;
+    private static AudioManager audioManager;
+    private static boolean resumeOnFocusGain;
+    private static boolean duckedByFocus;
+    private static boolean focusPaused;
+
+    private static final AudioManager.OnAudioFocusChangeListener focusListener =
+            new AudioManager.OnAudioFocusChangeListener() {
+                @Override
+                public void onAudioFocusChange(int change) {
+                    synchronized (LocalPlayer.class) {
+                        if (player == null) {
+                            return;
+                        }
+                        switch (change) {
+                            case AudioManager.AUDIOFOCUS_LOSS:
+                                resumeOnFocusGain = false;
+                                focusPaused = true;
+                                pauseLocked();
+                                Logs.i(TAG, "audio focus lost - local paused");
+                                break;
+                            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                                resumeOnFocusGain = isPlayingLocked();
+                                focusPaused = true;
+                                pauseLocked();
+                                Logs.i(TAG, "audio focus transient loss - local paused");
+                                break;
+                            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                                duckedByFocus = true;
+                                try {
+                                    player.setVolume(0.2f, 0.2f);
+                                } catch (Throwable ignored) {
+                                    // best effort
+                                }
+                                Logs.i(TAG, "audio focus ducked - local quieter");
+                                break;
+                            case AudioManager.AUDIOFOCUS_GAIN:
+                                if (duckedByFocus) {
+                                    duckedByFocus = false;
+                                    try {
+                                        player.setVolume(1f, 1f);
+                                    } catch (Throwable ignored) {
+                                        // best effort
+                                    }
+                                }
+                                focusPaused = false;
+                                if (resumeOnFocusGain) {
+                                    resumeOnFocusGain = false;
+                                    requestFocusLocked();
+                                    try {
+                                        player.start();
+                                        completed = false;
+                                        Logs.i(TAG, "audio focus regained - local resumed");
+                                    } catch (Throwable t) {
+                                        Logs.w(TAG, "focus resume: " + t);
+                                    }
+                                }
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                }
+            };
 
     private LocalPlayer() {
     }
@@ -47,6 +111,13 @@ public final class LocalPlayer {
             } catch (Throwable t) {
                 return false;
             }
+        }
+    }
+
+    /** True while playback is paused because another app or a car prompt owns audio focus. */
+    public static boolean isFocusPaused() {
+        synchronized (LocalPlayer.class) {
+            return focusPaused;
         }
     }
 
@@ -86,8 +157,11 @@ public final class LocalPlayer {
         if (!file.isFile() || file.length() < 24 * 1024) {
             return false;
         }
+        AudioManager manager = (AudioManager) context.getApplicationContext()
+                .getSystemService(Context.AUDIO_SERVICE);
         synchronized (LocalPlayer.class) {
             stopLocked();
+            audioManager = manager;
             MediaPlayer mp = null;
             try {
                 mp = new MediaPlayer();
@@ -117,15 +191,20 @@ public final class LocalPlayer {
                     }
                 });
                 mp.prepare();
+                requestFocusLocked();
                 mp.start();
                 player = mp;
                 activeId = track.id;
                 completed = false;
+                resumeOnFocusGain = false;
+                duckedByFocus = false;
+                focusPaused = false;
                 Logs.i(TAG, "playing local file " + file.getName()
                         + " (" + (file.length() / 1024) + " KB)");
                 return true;
             } catch (Throwable t) {
                 Logs.w(TAG, "local play failed: " + t);
+                abandonFocusLocked();
                 if (mp != null) {
                     try {
                         mp.release();
@@ -143,14 +222,9 @@ public final class LocalPlayer {
             if (player == null) {
                 return;
             }
-            try {
-                if (player.isPlaying()) {
-                    player.pause();
-                    Logs.i(TAG, "local paused");
-                }
-            } catch (Throwable t) {
-                Logs.w(TAG, "local pause: " + t);
-            }
+            focusPaused = false;
+            pauseLocked();
+            abandonFocusLocked();
         }
     }
 
@@ -161,6 +235,8 @@ public final class LocalPlayer {
             }
             try {
                 if (!player.isPlaying()) {
+                    requestFocusLocked();
+                    focusPaused = false;
                     player.start();
                     completed = false;
                     Logs.i(TAG, "local resumed");
@@ -171,6 +247,54 @@ public final class LocalPlayer {
         }
     }
 
+    private static void pauseLocked() {
+        try {
+            if (player.isPlaying()) {
+                player.pause();
+                Logs.i(TAG, "local paused");
+            }
+        } catch (Throwable t) {
+            Logs.w(TAG, "local pause: " + t);
+        }
+    }
+
+    private static boolean isPlayingLocked() {
+        try {
+            return player != null && player.isPlaying();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static void requestFocusLocked() {
+        if (audioManager == null) {
+            return;
+        }
+        try {
+            int result = audioManager.requestAudioFocus(focusListener,
+                    AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+            if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                Logs.w(TAG, "audio focus not granted (" + result + ")");
+            }
+        } catch (Throwable t) {
+            Logs.w(TAG, "request audio focus: " + t);
+        }
+    }
+
+    private static void abandonFocusLocked() {
+        resumeOnFocusGain = false;
+        duckedByFocus = false;
+        focusPaused = false;
+        if (audioManager == null) {
+            return;
+        }
+        try {
+            audioManager.abandonAudioFocus(focusListener);
+        } catch (Throwable t) {
+            Logs.w(TAG, "abandon audio focus: " + t);
+        }
+    }
+
     public static void stop() {
         synchronized (LocalPlayer.class) {
             stopLocked();
@@ -178,6 +302,7 @@ public final class LocalPlayer {
     }
 
     private static void stopLocked() {
+        abandonFocusLocked();
         if (player == null) {
             return;
         }

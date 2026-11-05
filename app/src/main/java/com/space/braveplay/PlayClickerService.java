@@ -469,7 +469,8 @@ public class PlayClickerService extends AccessibilityService {
         // A saved copy needs no browser, no accessibility and no lock-screen tricks; just
         // resume it if it stalled. Its completion callback advances the rotation.
         if (LocalPlayer.isActive()) {
-            if (!LocalPlayer.isPlaying() && !LocalPlayer.hasCompleted()) {
+            if (!LocalPlayer.isPlaying() && !LocalPlayer.hasCompleted()
+                    && !LocalPlayer.isFocusPaused()) {
                 Logs.i(TAG, "silent -> local resume");
                 LocalPlayer.resume();
             }
