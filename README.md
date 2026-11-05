@@ -69,6 +69,10 @@ background.
     audio, so the app keeps an inaudible track running while MUSIC ON; it never requests
     audio focus and never makes a sound. This needs the one-time *notification access*
     that `install.ps1` grants; without it the buttons stay with Brave.),
+  - **Android Auto / car pause is only latched when it was actually delivered**. If a
+    head unit sends a pause while connecting but Brave is still playing, the app keeps
+    the rotation alive instead of staying paused forever. Starting a saved copy pauses
+    **every** Brave tab, so a hidden tab cannot keep playing underneath it,
   - holds a partial wake lock and both apps are battery-whitelisted by `install.ps1`.
 - **MUSIC OFF** (big grey button) – the radio/keeper does nothing: it only opens links
   you tap (no auto-play taps, no volume changes, no Bluetooth changes, no rotation), and

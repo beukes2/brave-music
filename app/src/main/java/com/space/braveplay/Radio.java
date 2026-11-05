@@ -75,7 +75,7 @@ public final class Radio {
         launch(context, track.url);
     }
 
-    /** Stops Brave so it does not play over a saved local copy. */
+    /** Stops every Brave tab so none can play over a saved local copy. */
     private static void pauseBrave(Context context) {
         try {
             MediaSessionManager manager = (MediaSessionManager)
@@ -83,6 +83,7 @@ public final class Radio {
             if (manager == null) {
                 return;
             }
+            boolean paused = false;
             for (MediaController controller : manager.getActiveSessions(
                     new ComponentName(context, MediaListenerService.class))) {
                 String pkg = controller.getPackageName();
@@ -90,11 +91,14 @@ public final class Radio {
                     continue;
                 }
                 PlaybackState state = controller.getPlaybackState();
-                if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
+                if (state != null && (state.getState() == PlaybackState.STATE_PLAYING
+                        || state.getState() == PlaybackState.STATE_BUFFERING)) {
                     controller.getTransportControls().pause();
-                    Logs.i(TAG, "paused Brave before local playback");
+                    paused = true;
                 }
-                return;
+            }
+            if (paused) {
+                Logs.i(TAG, "paused Brave before local playback");
             }
         } catch (Throwable t) {
             Logs.w(TAG, "pause Brave: " + t);

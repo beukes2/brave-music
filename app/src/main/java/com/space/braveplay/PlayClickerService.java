@@ -511,18 +511,21 @@ public class PlayClickerService extends AccessibilityService {
             return;
         }
         lastBravePauseAt = now;
-        MediaController brave = braveController();
-        if (brave == null) {
-            return;
-        }
-        try {
-            PlaybackState state = brave.getPlaybackState();
-            if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
-                brave.getTransportControls().pause();
-                Logs.i(TAG, "paused Brave while a saved copy plays");
+        boolean paused = false;
+        for (MediaController brave : braveControllers()) {
+            try {
+                PlaybackState state = brave.getPlaybackState();
+                if (state != null && (state.getState() == PlaybackState.STATE_PLAYING
+                        || state.getState() == PlaybackState.STATE_BUFFERING)) {
+                    brave.getTransportControls().pause();
+                    paused = true;
+                }
+            } catch (Throwable t) {
+                Logs.w(TAG, "pause Brave: " + t);
             }
-        } catch (Throwable t) {
-            Logs.w(TAG, "pause Brave: " + t);
+        }
+        if (paused) {
+            Logs.i(TAG, "paused Brave while a saved copy plays");
         }
     }
 
@@ -774,15 +777,29 @@ public class PlayClickerService extends AccessibilityService {
                 @Override
                 public void onPause() {
                     Logs.i(TAG, "media button: pause");
-                    userPaused = true;
-                    forwardToBrave(false);
+                    boolean delivered = forwardToBrave(false);
+                    userPaused = delivered;
+                    if (!delivered) {
+                        // Android Auto/head units can send a pause while connecting. If Brave
+                        // is still producing audio, do not latch into "user paused" forever.
+                        Logs.w(TAG, "pause not delivered - keeping the radio active");
+                        nextActionAt = 0L;
+                        actionDelay = MIN_ACTION_DELAY_MS;
+                        scanSoon(STARTUP_SCANS_MS);
+                    }
                 }
 
                 @Override
                 public void onStop() {
                     Logs.i(TAG, "media button: stop");
-                    userPaused = true;
-                    forwardToBrave(false);
+                    boolean delivered = forwardToBrave(false);
+                    userPaused = delivered;
+                    if (!delivered) {
+                        Logs.w(TAG, "stop not delivered - keeping the radio active");
+                        nextActionAt = 0L;
+                        actionDelay = MIN_ACTION_DELAY_MS;
+                        scanSoon(STARTUP_SCANS_MS);
+                    }
                 }
             });
             mediaSession.setActive(true);
@@ -912,38 +929,38 @@ public class PlayClickerService extends AccessibilityService {
         }
     }
 
-    /** Sends play/pause to Brave, which actually owns the audio. */
-    private void forwardToBrave(boolean play) {
+    /** Sends play/pause to Brave or the local player; returns true when it was delivered. */
+    private boolean forwardToBrave(boolean play) {
         if (LocalPlayer.isActive()) {
             if (play) {
                 LocalPlayer.resume();
             } else {
                 LocalPlayer.pause();
             }
-            Logs.i(TAG, "forwarded " + (play ? "play" : "pause") + " to local player");
-            return;
+            boolean ok = play ? LocalPlayer.isPlaying() : !LocalPlayer.isPlaying();
+            Logs.i(TAG, "forwarded " + (play ? "play" : "pause") + " to local player"
+                    + (ok ? "" : " (not confirmed)"));
+            return ok;
         }
-        try {
-            MediaSessionManager manager =
-                    (MediaSessionManager) getSystemService(MEDIA_SESSION_SERVICE);
-            if (manager != null) {
-                List<MediaController> sessions = manager.getActiveSessions(
-                        new ComponentName(this, MediaListenerService.class));
-                for (MediaController controller : sessions) {
-                    String pkg = controller.getPackageName();
-                    if (pkg != null && pkg.startsWith("com.brave.browser")) {
-                        if (play) {
-                            controller.getTransportControls().play();
-                        } else {
-                            controller.getTransportControls().pause();
-                        }
-                        Logs.i(TAG, "forwarded " + (play ? "play" : "pause") + " to " + pkg);
-                        return;
-                    }
+
+        List<MediaController> sessions = braveControllers();
+        boolean delivered = false;
+        if (play) {
+            MediaController controller = bestBraveController(sessions);
+            if (controller != null) {
+                try {
+                    controller.getTransportControls().play();
+                    Logs.i(TAG, "forwarded play to " + controller.getPackageName());
+                    delivered = true;
+                } catch (Throwable t) {
+                    Logs.w(TAG, "forward play failed: " + t);
                 }
             }
-        } catch (Throwable t) {
-            Logs.w(TAG, "forward to Brave failed (" + t + ") - notification access missing?");
+        } else {
+            delivered = pauseAllBrave(sessions);
+        }
+        if (delivered) {
+            return true;
         }
 
         // Fallback: tap the player button when Brave is on screen.
@@ -956,13 +973,117 @@ public class PlayClickerService extends AccessibilityService {
                             || wanted.equals(lower(node.getText()))) {
                         if (clickNode(node)) {
                             Logs.i(TAG, "fallback tapped " + wanted);
-                            return;
+                            return true;
                         }
                     }
                 }
             }
         }
         Logs.w(TAG, "play/pause could not be forwarded");
+        return false;
+    }
+
+    /** Every active Brave media session (Brave keeps one per tab). */
+    private List<MediaController> braveControllers() {
+        List<MediaController> out = new ArrayList<MediaController>();
+        try {
+            MediaSessionManager manager =
+                    (MediaSessionManager) getSystemService(MEDIA_SESSION_SERVICE);
+            if (manager == null) {
+                return out;
+            }
+            for (MediaController controller : manager.getActiveSessions(
+                    new ComponentName(this, MediaListenerService.class))) {
+                String pkg = controller.getPackageName();
+                if (pkg != null && pkg.startsWith("com.brave.browser")) {
+                    out.add(controller);
+                }
+            }
+        } catch (Throwable ignored) {
+            // no notification access, or the session list disappeared
+        }
+        return out;
+    }
+
+    /**
+     * Best session for metadata/play: prefer a playing session with a real title, then a
+     * titled one, then a playing one. Android Auto can make several tabs active at once.
+     */
+    private MediaController bestBraveController(List<MediaController> sessions) {
+        MediaController playingTitled = null;
+        long playingTitledAt = Long.MIN_VALUE;
+        MediaController titled = null;
+        long titledAt = Long.MIN_VALUE;
+        MediaController playing = null;
+        long playingAt = Long.MIN_VALUE;
+        MediaController any = null;
+        long anyAt = Long.MIN_VALUE;
+        for (MediaController controller : sessions) {
+            PlaybackState state = controller.getPlaybackState();
+            long updated = state == null ? 0L : state.getLastPositionUpdateTime();
+            boolean isPlaying = state != null
+                    && ((state.getState() == PlaybackState.STATE_PLAYING
+                    && state.getPlaybackSpeed() > 0f)
+                    || state.getState() == PlaybackState.STATE_BUFFERING);
+            MediaMetadata meta = controller.getMetadata();
+            String title = meta == null ? null
+                    : meta.getString(MediaMetadata.METADATA_KEY_TITLE);
+            boolean hasTitle = usefulTitle(title);
+            if (isPlaying && hasTitle && updated >= playingTitledAt) {
+                playingTitled = controller;
+                playingTitledAt = updated;
+            }
+            if (hasTitle && updated >= titledAt) {
+                titled = controller;
+                titledAt = updated;
+            }
+            if (isPlaying && updated >= playingAt) {
+                playing = controller;
+                playingAt = updated;
+            }
+            if (updated >= anyAt) {
+                any = controller;
+                anyAt = updated;
+            }
+        }
+        if (playingTitled != null) {
+            return playingTitled;
+        }
+        if (titled != null) {
+            return titled;
+        }
+        if (playing != null) {
+            return playing;
+        }
+        return any;
+    }
+
+    /** Pauses every Brave tab; Android Auto can leave a playing tab hidden behind another. */
+    private boolean pauseAllBrave(List<MediaController> sessions) {
+        boolean delivered = false;
+        for (MediaController controller : sessions) {
+            try {
+                controller.getTransportControls().pause();
+                Logs.i(TAG, "forwarded pause to " + controller.getPackageName());
+                delivered = true;
+            } catch (Throwable t) {
+                Logs.w(TAG, "forward pause failed: " + t);
+            }
+        }
+        return delivered;
+    }
+
+    private static boolean usefulTitle(String title) {
+        if (TextUtils.isEmpty(title)) {
+            return false;
+        }
+        String value = title.trim().toLowerCase(Locale.ROOT);
+        return !("youtube".equals(value)
+                || "m.youtube.com".equals(value)
+                || "www.youtube.com".equals(value)
+                || "brave".equals(value)
+                || "new tab".equals(value)
+                || "about:blank".equals(value));
     }
 
     private boolean hasNotificationAccess() {
@@ -1149,26 +1270,30 @@ public class PlayClickerService extends AccessibilityService {
             return LocalPlayer.isPlaying();
         }
         // Our own silent keep-alive track would make isMusicActive() permanently true, so ask
-        // Brave's own media session what it is doing instead.
-        MediaController brave = braveController();
-        if (brave != null) {
+        // every Brave tab's media session what it is doing instead. Android Auto can make an
+        // older, paused tab the first session while another tab is still playing.
+        List<MediaController> sessions = braveControllers();
+        for (MediaController brave : sessions) {
             try {
                 PlaybackState state = brave.getPlaybackState();
-                if (state != null) {
-                    int value = state.getState();
-                    if (value == PlaybackState.STATE_PLAYING) {
-                        // Chromium sometimes keeps STATE_PLAYING and reports speed 0 while paused.
-                        return state.getPlaybackSpeed() > 0f;
-                    }
-                    return value == PlaybackState.STATE_BUFFERING;
+                if (state == null) {
+                    continue;
                 }
-                return false;
+                int value = state.getState();
+                if (value == PlaybackState.STATE_PLAYING) {
+                    // Chromium sometimes keeps STATE_PLAYING and reports speed 0 while paused.
+                    if (state.getPlaybackSpeed() > 0f) {
+                        return true;
+                    }
+                } else if (value == PlaybackState.STATE_BUFFERING) {
+                    return true;
+                }
             } catch (Throwable t) {
                 Logs.w(TAG, "brave playback state: " + t);
             }
         }
-        if (hasNotificationAccess()) {
-            // Brave is not running (or has no media session): that is silence, not playback.
+        if (!sessions.isEmpty() || hasNotificationAccess()) {
+            // Brave has sessions but none are playing: that is silence, not playback.
             return false;
         }
         try {
@@ -1179,25 +1304,9 @@ public class PlayClickerService extends AccessibilityService {
         }
     }
 
-    /** Brave's own media session, or {@code null} when notification access is missing. */
+    /** Brave's most relevant media session, or {@code null} when none is active. */
     private MediaController braveController() {
-        try {
-            MediaSessionManager manager =
-                    (MediaSessionManager) getSystemService(MEDIA_SESSION_SERVICE);
-            if (manager == null) {
-                return null;
-            }
-            for (MediaController controller : manager.getActiveSessions(
-                    new ComponentName(this, MediaListenerService.class))) {
-                String pkg = controller.getPackageName();
-                if (pkg != null && pkg.startsWith("com.brave.browser")) {
-                    return controller;
-                }
-            }
-        } catch (Throwable ignored) {
-            // no notification access
-        }
-        return null;
+        return bestBraveController(braveControllers());
     }
 
     private boolean isBraveForeground() {
