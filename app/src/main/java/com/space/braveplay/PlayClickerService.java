@@ -60,6 +60,8 @@ public class PlayClickerService extends AccessibilityService {
 
     private static final String TAG = "BravePlayClicker";
 
+    private static PlayClickerService instance;
+
     private static final long TICK_MS = 5_000L;
     private static final long HEARTBEAT_MS = 20_000L;
     private static final long BLUETOOTH_RETRY_MS = 60_000L;
@@ -222,9 +224,54 @@ public class PlayClickerService extends AccessibilityService {
         }
     };
 
+    /**
+     * One-shot scan for a link the user just opened, even while MUSIC OFF. It only taps
+     * unmute/play/dismiss and never advances the rotation.
+     */
+    private final Runnable userNudgeTask = new Runnable() {
+        @Override
+        public void run() {
+            if (LocalPlayer.isActive()) {
+                return;
+            }
+            if (isBraveForeground() || (keyguardLocked() && hasBraveWindow())) {
+                scanAndClick(true);
+            }
+        }
+    };
+
+    public static void nudgeUnmute() {
+        PlayClickerService service = instance;
+        if (service == null) {
+            Logs.w(TAG, "user link: accessibility service is not connected");
+            return;
+        }
+        service.handler.post(new Runnable() {
+            @Override
+            public void run() {
+                PlayClickerService current = instance;
+                if (current != null) {
+                    current.scheduleUserNudge();
+                }
+            }
+        });
+    }
+
+    private void scheduleUserNudge() {
+        if (LocalPlayer.isActive()) {
+            return;
+        }
+        Logs.i(TAG, "user link: scanning for unmute/play");
+        handler.removeCallbacks(userNudgeTask);
+        for (long delay : STARTUP_SCANS_MS) {
+            handler.postDelayed(userNudgeTask, delay);
+        }
+    }
+
     @Override
     public void onServiceConnected() {
         super.onServiceConnected();
+        instance = this;
         Logs.init(this);
         prefs = Library.prefs(this);
         prefs.registerOnSharedPreferenceChangeListener(prefListener);
@@ -279,6 +326,9 @@ public class PlayClickerService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        if (instance == this) {
+            instance = null;
+        }
         handler.removeCallbacksAndMessages(null);
         stopTicker();
         releaseWakeLock();

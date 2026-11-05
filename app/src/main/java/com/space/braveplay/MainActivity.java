@@ -430,6 +430,7 @@ public class MainActivity extends Activity {
                         Urls.videoId(normalized), normalized, "", "", 0));
             }
             Radio.play(this, track);
+            PlayClickerService.nudgeUnmute();
             List<Track> added = new ArrayList<Track>();
             added.add(track);
             fetchTitles(added);
@@ -568,6 +569,7 @@ public class MainActivity extends Activity {
         Track track = tracks.get(position);
         Logs.i("BravePlayUI", "user picked #" + (position + 1) + " \"" + track.displayTitle() + "\"");
         Radio.play(this, track);
+        PlayClickerService.nudgeUnmute();
         refreshUi();
     }
 

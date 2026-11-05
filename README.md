@@ -77,10 +77,10 @@ background.
     normal background close; that is harmless because its playback and media session are
     gone,
   - holds a partial wake lock and both apps are battery-whitelisted by `install.ps1`.
-- **MUSIC OFF** (big grey button) – the radio/keeper does nothing: it only opens links
-  you tap (no auto-play taps, no volume changes, no Bluetooth changes, no rotation), and
-  a locally playing song is stopped. **Capture stays on** and videos you play in Brave
-  are still saved.
+- **MUSIC OFF** (big grey button) - the radio/keeper does not advance or rotate. Tapping a
+  row opens it in Brave and runs a short one-shot mute/play scan for that link; it never
+  starts the next-song rotation. A locally playing song is stopped. **Capture stays on**
+  and videos you play in Brave are still saved.
 
 ## Screen lock for cycling
 
